@@ -8,7 +8,11 @@ dependencies = [
     "ctranslate2>=4.8.1",
     "customtkinter>=6.0.0",
     "faster-whisper>=1.2.1",
-    "ffmpeg>=1.4",
     "imageio-ffmpeg>=0.6.0",
     "tkinterdnd2>=0.6.2",
+]
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.22.2",
 ]

@@ -28,12 +28,43 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Pfade für Config-Dateien
-CONFIG_FILE = Path(__file__).parent / "config.json"
-TRANSLATIONS_FILE = Path(__file__).parent / "translations.json"
+def resource_path(relative_name: str) -> Path:
+    """Pfad zu einer gebündelten Ressource (Development und PyInstaller One-Folder/One-File)."""
+    if hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS) / relative_name
+    return Path(__file__).parent / relative_name
 
-# Temp-Ordner Pfad
-TEMP_DIR = Path(__file__).parent / "_temp"
+
+def app_base_dir() -> Path:
+    """Basisverzeichnis der Anwendung (EXE-Ordner bei PyInstaller, sonst Projektordner)."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent
+    return Path(__file__).parent
+
+
+def app_config_dir() -> Path:
+    """Benutzerkonfigurations-Verzeichnis: %APPDATA%\\Capti."""
+    config_dir = Path(os.environ.get("APPDATA", str(Path.home()))) / "Capti"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    return config_dir
+
+
+# Pfade für gebündelte Ressourcen (read-only, im Bundle enthalten)
+TRANSLATIONS_FILE = resource_path("translations.json")
+
+# Benutzer-Konfiguration (beschreibbar) im APPDATA-Profil
+CONFIG_FILE = app_config_dir() / "config.json"
+
+# Einmalige Migration: Bestehende Konfiguration aus dem Projektordner übernehmen
+_legacy_config = Path(__file__).parent / "config.json"
+if not CONFIG_FILE.exists() and _legacy_config.exists():
+    try:
+        shutil.copy2(_legacy_config, CONFIG_FILE)
+    except Exception:
+        pass  # Fallback: Defaults werden verwendet
+
+# Temp-Ordner Pfad (neben der Anwendung, nicht im schreibgeschützten Bundle)
+TEMP_DIR = app_base_dir() / "_temp"
 
 
 class TranslationManager:
