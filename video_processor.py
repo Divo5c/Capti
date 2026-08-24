@@ -191,6 +191,70 @@ class VideoProcessor:
             logger.error("Timeout bei Untertitel-Einbettung")
             raise RuntimeError("Untertitel-Einbettung Timeout (10 Minuten überschritten)")
 
+    def embed_ass(self, video_path: str, ass_path: str, output_path: str = None) -> str:
+        """
+        Bettet ASS-Untertitel hart in das Video ein (neue MP4-Datei).
+        Verwendet die Styles aus der ASS-Datei (kein force_style-Override),
+        damit Karaoke-Highlighting erhalten bleibt.
+
+        Args:
+            video_path: Pfad zur Eingabe-Videodatei
+            ass_path: Pfad zur ASS-Untertiteldatei
+            output_path: Pfad für die Ausgabe-Videodatei (optional)
+
+        Returns:
+            Pfad zur Ausgabedatei mit eingebetteten Untertiteln
+        """
+        if not os.path.exists(video_path):
+            raise FileNotFoundError(f"Videodatei nicht gefunden: {video_path}")
+        if not os.path.exists(ass_path):
+            raise FileNotFoundError(f"ASS-Datei nicht gefunden: {ass_path}")
+
+        if output_path is None:
+            video_stem = Path(video_path).stem
+            output_dir = Path(video_path).parent
+            output_path = str(output_dir / f"{video_stem}_subtitled.mp4")
+
+        logger.info(f"Bette ASS-Untertitel ein: {video_path} + {ass_path} -> {output_path}")
+
+        ass_escaped = ass_path.replace("\\", "/").replace(":", "\\:")
+
+        cmd = [
+            self.ffmpeg_path,
+            "-y",
+            "-i", video_path,
+            "-vf", f"subtitles='{ass_escaped}'",
+            "-c:v", "libx264",
+            "-preset", "medium",
+            "-crf", "23",
+            "-c:a", "aac",
+            "-b:a", "128k",
+            "-movflags", "+faststart",
+            output_path
+        ]
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=600
+            )
+
+            if result.returncode != 0:
+                logger.error(f"ffmpeg Fehler: {result.stderr}")
+                raise RuntimeError(f"ASS-Einbettung fehlgeschlagen: {result.stderr}")
+
+            if not os.path.exists(output_path):
+                raise RuntimeError("Ausgabe-Video wurde nicht erstellt")
+
+            logger.info(f"ASS-Untertitel erfolgreich eingebettet: {output_path}")
+            return output_path
+
+        except subprocess.TimeoutExpired:
+            logger.error("Timeout bei ASS-Einbettung")
+            raise RuntimeError("ASS-Einbettung Timeout (10 Minuten überschritten)")
+
     def _embed_subtitles_fallback(self, video_path: str, srt_path: str, output_path: str) -> str:
         """
         Fallback-Methode für Untertitel-Einbettung ohne komplexes Styling.

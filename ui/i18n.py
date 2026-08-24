@@ -1,0 +1,339 @@
+"""
+Capti i18n: zentrale UI-Übersetzung für die neue Screen-Architektur.
+
+- Sprachen: de (Default/Fallback) und en
+- Zugriff ausschließlich über t(key, **kwargs)
+- Unbekannte Keys liefern den Key selbst (niemals Crash)
+- Platzhalter: t("home.greeting", name="Diraj")
+
+Die aktuelle Sprache wird vom AppController gesetzt (Config: %APPDATA%/Capti).
+"""
+
+# ---------------------------------------------------------------------
+# Übersetzungen
+# ---------------------------------------------------------------------
+TRANSLATIONS = {
+    "de": {
+        # Navigation (Sidebar)
+        "nav.home": "Home",
+        "nav.new_project": "Neues Projekt",
+        "nav.caption_style": "Caption Style",
+        "nav.processing": "Verarbeitung",
+        "nav.result": "Ergebnis",
+        "nav.settings": "Einstellungen",
+
+        # Home
+        "home.tagline": "Untertitel. Automatisch. Dein Stil.",
+        "home.greeting": "Hallo, {name}!",
+        "home.greeting_no_name": "Hallo!",
+        "home.atmosphere.1": "Heute ein Short oder ein Video?",
+        "home.atmosphere.2": "Hoffentlich kein langes Video.😜",
+        "home.atmosphere.3": "Bereit für dein nächstes Projekt?",
+        "home.atmosphere.4": "Wie ist dein letztes Video gelaufen?",
+        "home.cta_new": "+ Neues Projekt",
+        "home.cta_hint": "Video auswählen oder hierher ziehen",
+        "home.history_title": "Zuletzt verarbeitet",
+        "history.empty_title": "Noch keine Videos verarbeitet.",
+        "history.empty_hint": "Starte dein erstes Projekt.",
+        "history.unknown_video": "Unbekanntes Video",
+        "footer.created_by": "Erstellt von",
+
+        # New Project
+        "np.title": "Neues Projekt",
+        "np.subtitle": "Erstelle Untertitel für dein nächstes Video.",
+        "np.drop_text": "Video hierher ziehen",
+        "np.or_text": "oder Datei auswählen",
+        "np.btn_select": "Video auswählen",
+        "np.select_dialog_title": "Video auswählen",
+        "np.lang_title": "Sprache",
+        "np.lang_desc": "Gesprochene Sprache im Video",
+        "np.lang.auto": "Auto",
+        "np.lang.de": "Deutsch",
+        "np.lang.en": "English",
+        "np.trans_title": "Übersetzung",
+        "np.trans_desc": "Mehrsprachige Übersetzung kommt bald.",
+        "np.model_title": "Transkriptionsmodell",
+        "np.model_hint.tiny": "schnell · geringer Speicher",
+        "np.model_hint.base": "schnell · kleiner Speicher",
+        "np.model_hint.small": "ausgewogen · Standard",
+        "np.model_hint.medium": "genauer · mehr Zeit & Speicher",
+        "np.model_note": "Größere Modelle können genauer sein, benötigen aber mehr Zeit und Speicher.",
+        "np.continue": "Weiter →",
+        "np.warn_no_video": "Bitte wähle zuerst ein Video aus.",
+        "np.warn_invalid": "Ungültiges Videoformat.",
+        "np.invalid_file": "Ungültige Datei.",
+        "common.back": "← Zurück",
+
+        # Drag & Drop
+        "dnd.no_file": "Keine Datei erkannt.",
+        "dnd.invalid_format": "Ungültiges Dateiformat. Erlaubt: mp4, mov, avi, mkv, webm, flv, wmv, m4v",
+
+        # Processing
+        "proc.title": "Capti arbeitet...",
+        "proc.subtitle": "Dein Video wird gerade verarbeitet.",
+        "proc.no_video": "Kein Video ausgewählt",
+        "proc.preparing": "Video wird vorbereitet...",
+        "proc.step1": "Audio extrahieren",
+        "proc.step2": "Transkription",
+        "proc.step3": "Caption-Layout",
+        "proc.step4": "Untertitel einbetten",
+        "proc.step5": "Fertig",
+        "proc.done": "Verarbeitung erfolgreich abgeschlossen!",
+        "proc.failed": "Verarbeitung fehlgeschlagen.",
+        # Pipeline-Status-Keys (Pipeline ist UI-agnostisch und liefert nur Keys)
+        "pipeline.started": "Verarbeitung gestartet...",
+        "pipeline.extract_audio": "Extrahiere Audio...",
+        "pipeline.transcribe": "Transkribiere Audio...",
+        "pipeline.embed_subtitles": "Bette Untertitel ein...",
+        "pipeline.completed": "Verarbeitung erfolgreich abgeschlossen!",
+        "proc.error_prefix": "Fehler: {message}",
+
+        # Result
+        "res.title": "Fertig!",
+        "res.subtitle": "Dein Video wurde erfolgreich verarbeitet.",
+        "res.badge": "●  Untertitel erfolgreich eingebettet",
+        "res.no_result": "Kein Ergebnis vorhanden",
+        "res.no_output": "Kein Ausgabevideo verfügbar.",
+        "res.output_missing": "Ausgabedatei wurde nicht gefunden.",
+        "res.btn_open": "Video öffnen",
+        "res.btn_save_as": "Speichern unter...",
+        "res.btn_new_project": "Neues Projekt",
+        "res.btn_home": "Home",
+        "res.save_dialog_title": "Video speichern",
+        "res.save_failed": "Video konnte nicht gespeichert werden: {error}",
+
+        # Settings
+        "set.title": "Einstellungen",
+        "set.subtitle": "Passe Capti an deine Vorlieben an.",
+        "set.name_title": "Dein Name",
+        "set.name_desc": "Wie soll Capti dich auf dem Homescreen begrüßen?",
+        "set.theme_title": "Darstellung",
+        "set.theme_desc": "Wähle das Erscheinungsbild von Capti.",
+        "set.theme.dark": "Dunkel",
+        "set.theme.light": "Hell",
+        "set.theme.yellow": "Yellow",
+        "set.lang_title": "Sprache",
+        "set.lang_desc": "Wähle die Sprache der Capti-Oberfläche.",
+        "set.lang.de": "Deutsch",
+        "set.lang.en": "English",
+        "set.model_title": "Standardmodell",
+        "set.model_desc": "Dieses Whisper-Modell wird bei neuen Projekten vorausgewählt.",
+        "set.history_title": "Verlauf",
+        "set.history_desc": "Gespeicherte Verarbeitungseinträge verwalten.",
+        "set.clear_history": "Verlauf löschen",
+        "set.history_cleared": "Verlauf gelöscht.",
+        "set.history_clear_failed": "Verlauf konnte nicht gelöscht werden.",
+        "set.btn_save": "Änderungen speichern",
+        "set.saved": "Änderungen gespeichert.",
+        "set.save_failed": "Speichern fehlgeschlagen.",
+
+        # Caption Style
+        "cs.title": "Caption Style",
+        "cs.subtitle": "Passe das Aussehen deiner Untertitel an.",
+        "cs.preview": "VORSCHAU",
+        "cs.preview_sentence": "So sehen deine Captions im Video aus",
+        "cs.preview_replay": "↻",
+        "cs.preview_replay_hint": "Vorschau erneut abspielen",
+        "cs.preview_line1a": "Das ist dein ",
+        "cs.preview_line1b": " Style.",
+        "cs.preview_line2": "Zweite Zeile bleibt clean.",
+        "cs.card_colors": "Farben",
+        "cs.color.normal": "Normalfarbe",
+        "cs.color.highlight": "Highlightfarbe",
+        "cs.color.outline": "Outline-Farbe",
+        "cs.color.shadow": "Shadow-Farbe",
+        "cs.card_pop": "Pop-Effekt",
+        "cs.pop_enabled": "Pop-Effekt aktiv",
+        "cs.pop_scale": "Pop Scale",
+        "cs.pop_decay": "Pop Decay (ms)",
+        "cs.card_layout": "Layout",
+        "cs.layout_info": ("Dynamisches Layout: Portrait/Landscape werden automatisch "
+                           "berechnet · max. 2 Zeilen · Safe Area unten"),
+        "cs.card_font": "Schrift",
+        "cs.font_current": "Aktuelle Caption-Schrift:",
+        "cs.font_value": "{name} · {size} px",
+        "cs.preset_applied": "Preset „{name}“ angewendet.",
+        "cs.footer_note": "Dein Caption Style wird bei der nächsten Verarbeitung verwendet.",
+        "cs.start_processing": "Verarbeitung starten →",
+        "cs.workflow_hint": "Dieser Style wird für das aktuelle Projekt verwendet.",
+        "cs.back_to_project": "← Zurück zum Projekt",
+    },
+    "en": {
+        # Navigation (Sidebar)
+        "nav.home": "Home",
+        "nav.new_project": "New Project",
+        "nav.caption_style": "Caption Style",
+        "nav.processing": "Processing",
+        "nav.result": "Result",
+        "nav.settings": "Settings",
+
+        # Home
+        "home.tagline": "Subtitles. Automatic. Your style.",
+        "home.greeting": "Hello, {name}!",
+        "home.greeting_no_name": "Hello!",
+        "home.atmosphere.1": "A Short or a full video today?",
+        "home.atmosphere.2": "Hopefully not a long one.",
+        "home.atmosphere.3": "Ready for your next project?",
+        "home.atmosphere.4": "How did your last video go?",
+        "home.cta_new": "+ New Project",
+        "home.cta_hint": "Choose a video or drop it here",
+        "home.history_title": "Recently processed",
+        "history.empty_title": "No videos processed yet.",
+        "history.empty_hint": "Start your first project.",
+        "history.unknown_video": "Unknown video",
+        "footer.created_by": "Created by",
+
+        # New Project
+        "np.title": "New Project",
+        "np.subtitle": "Create subtitles for your next video.",
+        "np.drop_text": "Drag a video here",
+        "np.or_text": "or choose a file",
+        "np.btn_select": "Choose video",
+        "np.select_dialog_title": "Choose video",
+        "np.lang_title": "Language",
+        "np.lang_desc": "Spoken language in the video",
+        "np.lang.auto": "Auto",
+        "np.lang.de": "German",
+        "np.lang.en": "English",
+        "np.trans_title": "Translation",
+        "np.trans_desc": "Multilingual translation is coming soon.",
+        "np.model_title": "Transcription model",
+        "np.model_hint.tiny": "fast · low memory",
+        "np.model_hint.base": "fast · small memory",
+        "np.model_hint.small": "balanced · standard",
+        "np.model_hint.medium": "more accurate · more time & memory",
+        "np.model_note": "Larger models can be more accurate, but need more time and memory.",
+        "np.continue": "Next →",
+        "np.warn_no_video": "Please choose a video first.",
+        "np.warn_invalid": "Invalid video format.",
+        "np.invalid_file": "Invalid file.",
+        "common.back": "← Back",
+
+        # Drag & Drop
+        "dnd.no_file": "No file detected.",
+        "dnd.invalid_format": "Invalid file format. Allowed: mp4, mov, avi, mkv, webm, flv, wmv, m4v",
+
+        # Processing
+        "proc.title": "Capti is working...",
+        "proc.subtitle": "Your video is being processed.",
+        "proc.no_video": "No video selected",
+        "proc.preparing": "Preparing video...",
+        "proc.step1": "Extract audio",
+        "proc.step2": "Transcription",
+        "proc.step3": "Caption layout",
+        "proc.step4": "Embed subtitles",
+        "proc.step5": "Done",
+        "proc.done": "Processing completed successfully!",
+        "proc.failed": "Processing failed.",
+        # Pipeline-Status-Keys (Pipeline is UI-agnostic and only emits keys)
+        "pipeline.started": "Processing started...",
+        "pipeline.extract_audio": "Extracting audio...",
+        "pipeline.transcribe": "Transcribing audio...",
+        "pipeline.embed_subtitles": "Embedding subtitles...",
+        "pipeline.completed": "Processing completed successfully!",
+        "proc.error_prefix": "Error: {message}",
+
+        # Result
+        "res.title": "Done!",
+        "res.subtitle": "Your video was processed successfully.",
+        "res.badge": "●  Subtitles embedded successfully",
+        "res.no_result": "No result available",
+        "res.no_output": "No output video available.",
+        "res.output_missing": "Output file was not found.",
+        "res.btn_open": "Open video",
+        "res.btn_save_as": "Save as...",
+        "res.btn_new_project": "New Project",
+        "res.btn_home": "Home",
+        "res.save_dialog_title": "Save video",
+        "res.save_failed": "Could not save video: {error}",
+
+        # Settings
+        "set.title": "Settings",
+        "set.subtitle": "Customize Capti to your liking.",
+        "set.name_title": "Your name",
+        "set.name_desc": "How should Capti greet you on the home screen?",
+        "set.theme_title": "Appearance",
+        "set.theme_desc": "Choose how Capti looks.",
+        "set.theme.dark": "Dark",
+        "set.theme.light": "Light",
+        "set.theme.yellow": "Yellow",
+        "set.lang_title": "Language",
+        "set.lang_desc": "Choose the Capti interface language.",
+        "set.lang.de": "German",
+        "set.lang.en": "English",
+        "set.model_title": "Default model",
+        "set.model_desc": "This Whisper model is preselected for new projects.",
+        "set.history_title": "History",
+        "set.history_desc": "Manage saved processing entries.",
+        "set.clear_history": "Clear history",
+        "set.history_cleared": "History cleared.",
+        "set.history_clear_failed": "Could not clear history.",
+        "set.btn_save": "Save changes",
+        "set.saved": "Changes saved.",
+        "set.save_failed": "Saving failed.",
+
+        # Caption Style
+        "cs.title": "Caption Style",
+        "cs.subtitle": "Customize the look of your subtitles.",
+        "cs.preview": "PREVIEW",
+        "cs.preview_sentence": "This is how your captions will look",
+        "cs.preview_replay": "↻",
+        "cs.preview_replay_hint": "Replay preview animation",
+        "cs.preview_line1a": "This is your ",
+        "cs.preview_line1b": " style.",
+        "cs.preview_line2": "The second line stays clean.",
+        "cs.card_colors": "Colors",
+        "cs.color.normal": "Normal color",
+        "cs.color.highlight": "Highlight color",
+        "cs.color.outline": "Outline color",
+        "cs.color.shadow": "Shadow color",
+        "cs.card_pop": "Pop effect",
+        "cs.pop_enabled": "Pop effect enabled",
+        "cs.pop_scale": "Pop Scale",
+        "cs.pop_decay": "Pop Decay (ms)",
+        "cs.card_layout": "Layout",
+        "cs.layout_info": ("Dynamic layout: portrait/landscape are calculated "
+                           "automatically · max. 2 lines · safe area at bottom"),
+        "cs.card_font": "Font",
+        "cs.font_current": "Current caption font:",
+        "cs.font_value": "{name} · {size} px",
+        "cs.preset_applied": 'Preset "{name}" applied.',
+        "cs.footer_note": "Your caption style will be used for the next processing.",
+        "cs.start_processing": "Start processing →",
+        "cs.workflow_hint": "This style will be used for the current project.",
+        "cs.back_to_project": "← Back to project",
+    },
+}
+
+SUPPORTED_LANGUAGES = ("de", "en")
+DEFAULT_LANGUAGE = "de"
+
+_current_language = DEFAULT_LANGUAGE
+
+
+def set_language(language: str):
+    """Setzt die aktuelle UI-Sprache (ungültig -> Deutsch)."""
+    global _current_language
+    _current_language = language if language in SUPPORTED_LANGUAGES else DEFAULT_LANGUAGE
+
+
+def get_language() -> str:
+    """Gibt die aktuelle UI-Sprache zurück."""
+    return _current_language
+
+
+def t(key: str, **kwargs) -> str:
+    """Übersetzt einen Key in der aktuellen Sprache.
+
+    Fallback-Kette: aktuelle Sprache -> Deutsch -> Key selbst.
+    Formatierungsfehler führen niemals zu einem Crash.
+    """
+    text = TRANSLATIONS.get(_current_language, {}).get(key)
+    if text is None:
+        text = TRANSLATIONS[DEFAULT_LANGUAGE].get(key, key)
+    if kwargs:
+        try:
+            text = text.format(**kwargs)
+        except Exception:
+            pass  # niemals crashen – rohen Text zurückgeben
+    return text

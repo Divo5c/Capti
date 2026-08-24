@@ -5,6 +5,7 @@ Modernes GUI mit CustomTkinter, Dark/Light Mode, Drag & Drop, Language Switcher.
 """
 
 import os
+import queue
 import sys
 import json
 import threading
@@ -18,8 +19,10 @@ from tkinterdnd2 import TkinterDnD, DND_FILES
 from tkinter import filedialog, messagebox
 
 # Lokale Module importieren
-from subtitle_engine import create_subtitle_engine, SubtitleEngine
-from video_processor import create_video_processor, VideoProcessor
+from subtitle_engine import SubtitleEngine
+from video_processor import create_video_processor
+from pipeline import CaptiPipeline
+from version import __version__
 
 # Logging konfigurieren
 logging.basicConfig(
@@ -110,12 +113,23 @@ class TranslationManager:
             logger.warning(f"Fehler beim Laden der Config: {e}")
 
     def save_config(self):
-        """Speichert Konfiguration in config.json."""
+        """Speichert Konfiguration in config.json (Merge, kein Datenverlust).
+
+        Bestehende Keys (name, model, caption_style, ...) bleiben erhalten;
+        nur theme/language werden aktualisiert. Kaputtes JSON -> Defaults.
+        """
         try:
-            config = {
-                "theme": ctk.get_appearance_mode().lower(),
-                "language": self.current_language
-            }
+            config = {}
+            if CONFIG_FILE.exists():
+                try:
+                    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                        loaded = json.load(f)
+                    if isinstance(loaded, dict):
+                        config = loaded
+                except Exception:
+                    config = {}  # kaputte Config -> Defaults, Keys nicht rettbar
+            config["theme"] = ctk.get_appearance_mode().lower()
+            config["language"] = self.current_language
             with open(CONFIG_FILE, "w", encoding="utf-8") as f:
                 json.dump(config, f, indent=2)
         except Exception as e:
@@ -192,12 +206,18 @@ class CaptiApp:
         self.video_path: str = ""
         self.audio_path: str = ""
         self.srt_path: str = ""
+        self.ass_path: str = ""
         self.output_video_path: str = ""
         self.is_processing: bool = False
 
-        # Engine-Instanzen
-        self.subtitle_engine: Optional[SubtitleEngine] = None
-        self.video_processor: Optional[VideoProcessor] = None
+        # Pipeline (UI-agnostisch, Callbacks -> UI-Updates)
+        self.pipeline: Optional[CaptiPipeline] = None
+
+        # Thread-safe Event-Queue: Pipeline-Callbacks landen hier,
+        # ein Main-Thread-Poller verarbeitet sie (kein Tkinter-Zugriff
+        # aus dem Worker-Thread).
+        self._ui_queue: "queue.Queue" = queue.Queue()
+        self._poll_ui_queue()
 
         # GUI aufbauen
         self._setup_ui()
@@ -511,7 +531,7 @@ class CaptiApp:
     def _check_ffmpeg(self):
         """Prüft beim Start, ob ffmpeg verfügbar ist."""
         try:
-            self.video_processor = create_video_processor()
+            create_video_processor()
             self._log("INFO", "ffmpeg gefunden und bereit.")
         except FileNotFoundError as e:
             self._log("ERROR", str(e))
@@ -653,63 +673,46 @@ class CaptiApp:
         thread.start()
 
     def _process_video(self):
-        """Hauptverarbeitungslogik (läuft im Hintergrund-Thread)."""
+        """Startet die Verarbeitung über die UI-agnostische Pipeline (Hintergrund-Thread)."""
+        model_size = self.model_var.get()
+        language = self.trans_lang_var.get()
+        if language == "auto":
+            language = None
+
+        self.pipeline = CaptiPipeline(
+            temp_dir=TEMP_DIR,
+            on_status=lambda msg: self._ui_queue.put(("status", msg)),
+            on_progress=lambda pct: self._ui_queue.put(("progress", pct)),
+            on_log=lambda level, msg: self._ui_queue.put(("log", (level, msg))),
+            on_done=lambda path: self._ui_queue.put(("done", path)),
+            on_error=lambda err: self._ui_queue.put(("error", err)),
+        )
+        self.pipeline.run_async(self.video_path, model_size=model_size, language=language)
+
+    def _poll_ui_queue(self):
+        """Verarbeitet Pipeline-Events im Main-Thread (thread-safe)."""
         try:
-            # 1. SubtitleEngine initialisieren
-            self._update_status(self.translation_mgr.get("status_processing"), 5)
-            model_size = self.model_var.get()
-            self.subtitle_engine = create_subtitle_engine(model_size=model_size, device="auto")
+            while True:
+                kind, payload = self._ui_queue.get_nowait()
+                if kind == "status":
+                    self._do_update_status(payload)
+                elif kind == "progress":
+                    self.progress_var.set(payload / 100.0)
+                elif kind == "log":
+                    self._do_log(*payload)
+                elif kind == "done":
+                    self._on_pipeline_done(payload)
+                elif kind == "error":
+                    self._processing_error(payload)
+        except queue.Empty:
+            pass
+        self.root.after(100, self._poll_ui_queue)
 
-            # 2. VideoProcessor initialisieren (falls noch nicht geschehen)
-            if self.video_processor is None:
-                self.video_processor = create_video_processor()
-
-            # 3. Temp-Ordner erstellen
-            TEMP_DIR.mkdir(parents=True, exist_ok=True)
-
-            # 4. Audio extrahieren (in _temp)
-            self._update_status("Extrahiere Audio...", 15)
-            video_stem = Path(self.video_path).stem
-            self.audio_path = str(TEMP_DIR / f"{video_stem}_audio.wav")
-
-            self.audio_path = self.video_processor.extract_audio(self.video_path, self.audio_path)
-            self._log("INFO", f"Audio extrahiert: {os.path.basename(self.audio_path)}")
-
-            # 5. Transkription (SRT in _temp)
-            self._update_status("Transkribiere Audio...", 30)
-            language = self.trans_lang_var.get()
-            if language == "auto":
-                language = None
-
-            self.srt_path = str(TEMP_DIR / f"{video_stem}.srt")
-            self.subtitle_engine.transcribe_and_generate_srt(
-                self.audio_path,
-                self.srt_path,
-                language
-            )
-            self._log("SUCCESS", f"SRT-Datei erstellt: {os.path.basename(self.srt_path)}")
-
-            # 6. Untertitel einbetten (Output-Video im Original-Ordner)
-            self._update_status("Bette Untertitel ein...", 70)
-            video_dir = os.path.dirname(self.video_path)
-            self.output_video_path = os.path.join(video_dir, f"{video_stem}_subtitled.mp4")
-            self.output_video_path = self.video_processor.embed_subtitles(
-                self.video_path,
-                self.srt_path,
-                self.output_video_path
-            )
-            self._log("SUCCESS", f"Video mit Untertiteln erstellt: {os.path.basename(self.output_video_path)}")
-
-            # 7. Fertig
-            self._update_status(self.translation_mgr.get("status_done"), 100)
-            self._log("SUCCESS", "Verarbeitung erfolgreich abgeschlossen!")
-
-            # UI im Haupt-Thread aktualisieren
-            self.root.after(0, self._processing_finished)
-
-        except Exception as e:
-            self._log("ERROR", f"Fehler: {str(e)}")
-            self.root.after(0, lambda: self._processing_error(str(e)))
+    def _on_pipeline_done(self, output_path: str):
+        """Pipeline erfolgreich abgeschlossen."""
+        self.output_video_path = output_path
+        self.status_var.set(self.translation_mgr.get("status_done"))
+        self._processing_finished()
 
     def _processing_finished(self):
         """Wird aufgerufen, wenn die Verarbeitung erfolgreich war."""
@@ -754,18 +757,32 @@ class CaptiApp:
                 self._log("ERROR", f"Fehler beim Speichern: {e}")
                 messagebox.showerror("Speicherfehler", f"Fehler beim Speichern:\n{e}")
 
-    def _update_status(self, message: str, progress: float):
-        """Aktualisiert Status und Fortschrittsbalken (thread-safe)."""
-        self.root.after(0, lambda: self._do_update_status(message, progress))
+    def _update_status(self, message: str, progress: float = None):
+        """Status-Event thread-safe in die Queue stellen (kein Tkinter-Zugriff)."""
+        self._ui_queue.put(("status", message))
+        if progress is not None:
+            self._ui_queue.put(("progress", progress))
 
-    def _do_update_status(self, message: str, progress: float):
-        """Führt das eigentliche UI-Update aus."""
+    def _do_update_status(self, message: str, progress: float = None):
+        """Führt das eigentliche UI-Update aus.
+
+        Die Pipeline liefert Status-Keys ("pipeline.*"); diese werden
+        über den TranslationManager übersetzt. Freie Texte bleiben
+        unverändert.
+        """
+        if isinstance(message, str) and message.startswith("pipeline."):
+            message = self.translation_mgr.get(message)
         self.status_var.set(message)
-        self.progress_var.set(progress / 100.0)
+        if progress is not None:
+            self.progress_var.set(progress / 100.0)
+
+    def _update_progress(self, percent: float):
+        """Progress-Event thread-safe in die Queue stellen."""
+        self._ui_queue.put(("progress", percent))
 
     def _log(self, level: str, message: str):
-        """Fügt eine Log-Nachricht hinzu (thread-safe)."""
-        self.root.after(0, lambda: self._do_log(level, message))
+        """Log-Event thread-safe in die Queue stellen."""
+        self._ui_queue.put(("log", (level, message)))
 
     def _do_log(self, level: str, message: str):
         """Führt das eigentliche Log-Update aus."""
@@ -799,7 +816,11 @@ class CaptiApp:
 
 
 def main():
-    """Einstiegspunkt der Anwendung."""
+    """Einstiegspunkt der Anwendung.
+
+    Standard: neue Screen-Architektur über den AppController.
+    Mit CAPTI_LEGACY_UI=1: Fallback auf die bisherige monolithische UI.
+    """
     # DPI-Awareness für Windows (scharfe Darstellung)
     try:
         from ctypes import windll
@@ -807,15 +828,59 @@ def main():
     except Exception:
         pass
 
-    # TkinterDnD Root erstellen (muss vor CustomTkinter sein)
-    root = TkinterDnD.Tk()
+    use_legacy_ui = os.environ.get("CAPTI_LEGACY_UI", "0") == "1"
 
-    # CustomTkinter auf TkinterDnD Root anwenden
-    ctk.set_appearance_mode("dark")
-    ctk.set_default_color_theme("blue")
+    if use_legacy_ui:
+        # Legacy-UI als expliziter Fallback (CAPTI_LEGACY_UI=1)
+        # TkinterDnD Root erstellen (muss vor CustomTkinter sein)
+        root = TkinterDnD.Tk()
 
-    app = CaptiApp(root)
-    root.mainloop()
+        # CustomTkinter auf TkinterDnD Root anwenden
+        ctk.set_appearance_mode("dark")
+        ctk.set_default_color_theme("blue")
+
+        app = CaptiApp(root)
+        root.mainloop()
+    else:
+        # Neue Screen-Architektur (AppController + Screens) – Standard
+        ctk.set_appearance_mode("dark")
+        ctk.set_default_color_theme("blue")
+
+        root = ctk.CTk()
+        root.title(f"Capti {__version__}")
+        root.minsize(820, 560)
+        from config import get_config_value, load_window_state, save_window_state
+        # Gespeichertes Fenster-Layout anwenden (Größe/Position), danach
+        # ggf. maximieren. Ungültige/kaputte Werte -> Defaults, kein Crash.
+        state = load_window_state()
+        root.geometry(state["geometry"] or "1000x680")
+        if state["maximized"]:
+            try:
+                root.state("zoomed")
+            except Exception:
+                pass  # Plattform ohne "zoomed" -> normale Größe behalten
+
+        def _on_close():
+            try:
+                maximized = (root.state() == "zoomed")
+                geo = f"{root.winfo_width()}x{root.winfo_height()}" \
+                      f"{root.winfo_x():+d}{root.winfo_y():+d}"
+                save_window_state(geo, maximized)
+            except Exception:
+                pass  # Speichern darf das Schließen niemals blockieren
+            root.destroy()
+
+        root.protocol("WM_DELETE_WINDOW", _on_close)
+
+        from ui.app_controller import AppController
+        # Gespeichertes Theme aus der zentralen Config übernehmen
+        # (kein stiller Fallback auf dark beim Neustart).
+        from config import get_config_value
+        saved_theme = get_config_value("theme", "dark")
+        if saved_theme not in ("dark", "light", "yellow"):
+            saved_theme = "dark"
+        AppController(root, theme_name=saved_theme)
+        root.mainloop()
 
 
 if __name__ == "__main__":

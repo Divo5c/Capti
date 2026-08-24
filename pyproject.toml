@@ -1,7 +1,8 @@
 [project]
 name = "capti"
-version = "0.1.0"
-description = "Add your description here"
+# Version wird zentral in version.py gepflegt und hier gespiegelt.
+version = "2.0.0"
+description = "Capti 2.0 – lokale KI-Untertitel für Videos und Shorts mit Caption Styles"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [

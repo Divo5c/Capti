@@ -23,3 +23,8 @@ Desktop.ini
 
 # Release artifacts
 *.zip
+
+# Persoenliche/Runtime-Konfiguration (niemals committen!)
+config.json
+history.json
+*.log

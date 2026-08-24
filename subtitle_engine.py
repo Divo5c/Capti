@@ -55,7 +55,8 @@ class SubtitleEngine:
             language: Sprachcode (z.B. "de", "en") oder None für Auto-Erkennung
 
         Returns:
-            Liste von Segmenten mit start, end, text
+            Liste von Segmenten mit start, end, text und words
+            (words: Liste von Dicts mit word, start, end, probability)
         """
         if not os.path.exists(audio_path):
             raise FileNotFoundError(f"Audiodatei nicht gefunden: {audio_path}")
@@ -66,15 +67,28 @@ class SubtitleEngine:
             language=language,
             beam_size=5,
             vad_filter=True,
-            vad_parameters=dict(min_silence_duration_ms=500)
+            vad_parameters=dict(min_silence_duration_ms=500),
+            word_timestamps=True
         )
 
         result = []
         for segment in segments:
+            # Wort-Timestamps erfassen (Grundlage für Word-by-Word-Highlighting)
+            words = []
+            if segment.words:
+                for w in segment.words:
+                    words.append({
+                        "word": w.word.strip(),
+                        "start": w.start,
+                        "end": w.end,
+                        "probability": w.probability
+                    })
+
             result.append({
                 "start": segment.start,
                 "end": segment.end,
-                "text": segment.text.strip()
+                "text": segment.text.strip(),
+                "words": words
             })
 
         logger.info(f"Transkription abgeschlossen: {len(result)} Segmente, Sprache: {info.language}")
@@ -142,7 +156,9 @@ class SubtitleEngine:
 def create_subtitle_engine(model_size: str = "small", device: str = "auto") -> SubtitleEngine:
     if device == "auto":
         try:
-            import torch
+            # torch ist optional: nur für GPU-Erkennung; Capti läuft ohne PyTorch
+            # (faster-whisper nutzt ctranslate2). Pylance-Warnung bewusst unterdrückt.
+            import torch  # type: ignore[import-not-found]
             if torch.cuda.is_available():
                 device = "cuda"
                 logger.info(f"Automatische Gerätewahl: cuda ({torch.cuda.get_device_name(0)})")

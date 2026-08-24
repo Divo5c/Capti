@@ -25,11 +25,15 @@ BUILD_DIR = PROJECT_DIR / "build"
 
 
 def get_version() -> str:
-    """Liest die Version aus pyproject.toml."""
-    for line in (PROJECT_DIR / "pyproject.toml").read_text(encoding="utf-8").splitlines():
-        if line.strip().startswith("version"):
-            return line.split("=", 1)[1].strip().strip('"')
-    raise RuntimeError("Version nicht in pyproject.toml gefunden")
+    """Liest die Version zentral aus version.py (Fallback: pyproject.toml)."""
+    try:
+        import version  # noqa: PLC0415
+        return version.__version__
+    except Exception:
+        for line in (PROJECT_DIR / "pyproject.toml").read_text(encoding="utf-8").splitlines():
+            if line.strip().startswith("version"):
+                return line.split("=", 1)[1].strip().strip('"')
+    raise RuntimeError("Version nicht gefunden")
 
 
 def run(cmd: list) -> None:
