@@ -28,3 +28,15 @@ Desktop.ini
 config.json
 history.json
 *.log
+
+# Build-Time-Fetches (grosse Binaries, nie committen – siehe tools/fetch_ffprobe.py)
+third_party/
+
+# Generierte Build-Outputs (PyInstaller / Flutter-APKs, nie committen)
+Capti_release/
+mobile/build_real/
+mobile/build_real_apk/
+mobile/build_real_for_test/
+
+# Heruntergeladene Whisper-Modelle (siehe mobile/assets/models/README.md)
+mobile/assets/models/tiny.bin
