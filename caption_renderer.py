@@ -5,7 +5,10 @@ basierend auf den Word-Timestamps von faster-whisper.
 """
 
 import logging
+from types import MappingProxyType
 from typing import List
+
+from capti_core.render_model import RenderCaption, RenderWord, assign_lines
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +27,21 @@ MIN_WORD_DURATION = 0.2
 
 # Minimale Dialogue-Dauer in Sekunden (ASS-Auflösung: Zentisekunden)
 MIN_DIALOGUE_DURATION = 0.01
+
+
+def escape_ass_text(text: str) -> str:
+    """Escapet Transkript-/Usertext für ASS-Dialogue-Zeilen (Block 11).
+
+    Nur für USER-TEXT verwenden – NIEMALS auf bereits erzeugte
+    Override-/Karaoke-Tags anwenden (die bleiben roh/valide):
+        \\  ->  \\\\  (Backslash zuerst – sonst Doppel-Escaping)
+        {   ->  \\{
+        }   ->  \\}
+    Unicode/Umlaute bleiben unverändert. Leere/fehlende Werte -> "".
+    """
+    if not text:
+        return ""
+    return str(text).replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}")
 
 
 def _valid_time_range(start, end) -> bool:
@@ -88,6 +106,166 @@ def normalize_word_timestamps(words: List[dict], fallback_end=None) -> List[dict
         w["end"] = resolved
         normalized.append(w)
     return normalized
+
+
+def _coerce_karaoke_words(words, seg_start: float, seg_end):
+    """Löst Wortzeiten exakt nach der Legacy-Regel auf.
+
+    Returns:
+        Liste von (text, start, end, next_start)-Tupeln. Wirft bei
+        kaputten Wörtern dieselben Exceptions wie bisher (kein Stillhalten).
+    """
+    coerced = []
+    n = len(words)
+    for i, w in enumerate(words):
+        word_start = float(w["start"])
+        word_end = float(w.get("end", word_start))
+        if i + 1 < n:
+            try:
+                next_start = float(words[i + 1]["start"])
+            except (KeyError, TypeError, ValueError):
+                next_start = word_end
+        else:
+            next_start = float(seg_end) if _valid_time_range(word_start, seg_end) else word_end
+        coerced.append((w["word"], word_start, word_end, next_start))
+    return coerced
+
+
+def _render_karaoke_parts(coerced, seg_start: float, *, pop_enabled: bool,
+                          pop_scale: int, pop_decay_ms: int):
+    """Baut Karaoke-Parts + Wortlängen mit exakt der Legacy-Mathematik.
+
+    Usertext wird escapet, Renderer-Tags (\\k, \\t) bleiben roh.
+    Returns:
+        (parts, word_lengths) für den Zeilenumbruch.
+    """
+    parts = []
+    word_lengths = []
+    for text, word_start, word_end, next_start in coerced:
+        # Karaoke-Dauer immer positiv halten (min. 1 Zentisekunde)
+        duration_cs = max(1, int(round((max(next_start, word_end) - word_start) * 100)))
+
+        # Pop/Scale-Effekt: \\t-Zeiten sind ms relativ zum Dialogue-Start.
+        # Hochskalieren während das Wort gesprochen wird, danach zurück auf 100 %.
+        t_up = max(0, int(round((word_start - seg_start) * 1000)))
+        t_down = max(t_up + 1, int(round((word_end - seg_start) * 1000)))
+        t_back = t_down + pop_decay_ms
+        pop_tag = (
+            f"{{\\t({t_up},{t_down},\\fscx{pop_scale}\\fscy{pop_scale})"
+            f"\\t({t_down},{t_back},\\fscx100\\fscy100)}}"
+            if pop_enabled else ""
+        )
+        parts.append(f"{{\\k{duration_cs}}}{pop_tag}{escape_ass_text(text)}")
+        word_lengths.append(len(text))
+    return parts, word_lengths
+
+
+def _join_karaoke_lines(parts, word_lengths, max_words_per_line: int,
+                        chars_per_line=None) -> str:
+    """Verteilt Karaoke-Wörter auf maximal 2 Zeilen (Export-Regel).
+
+    Identische Logik wie CaptionRenderer._apply_line_breaks (Wortlimit,
+    dann Zeichenbudget); die Methode delegiert hierher.
+    """
+    n = len(parts)
+    lengths = word_lengths if word_lengths else [0] * n
+    max_per_line = max(1, max_words_per_line)
+    chars_limit = chars_per_line
+
+    # Größtes erstes-Zeilen-Ende finden, das beide Limits einhält
+    cut = n
+    word_count = 0
+    char_acc = 0
+    for i in range(n):
+        add_chars = lengths[i] + (1 if i > 0 else 0)
+        if word_count >= max_per_line:
+            cut = i
+            break
+        if chars_limit is not None and i > 0 and char_acc + add_chars > chars_limit:
+            cut = i
+            break
+        word_count += 1
+        char_acc += add_chars
+
+    if cut >= n:
+        return " ".join(parts)
+
+    return "\\N".join([
+        " ".join(parts[:cut]),
+        " ".join(parts[cut:])
+    ])
+
+
+def _captions_for_ass(segments, style: dict, layout: dict):
+    """Baut RenderCaption-Liste für den ASS-Adapter (Block 17).
+
+    Byte-Identitäts-Regeln (exakt wie die Legacy-Schleife in generate_ass):
+    - Style wird ROH übernommen (ASS-Farben, KEIN from_dict – das würde
+      &H-Farben auf Defaults zurücksetzen).
+    - Wörter werden mit der Legacy-Regel (_coerce_karaoke_words) aufgelöst,
+      NICHT normalisiert (normalize würde degenerierte Fälle anders lösen).
+    - Ungültige Segmente werden übersprungen (mit identischer Warnung).
+    """
+    captions = []
+    for segment in segments:
+        try:
+            seg_start = float(segment["start"])
+            seg_end = float(segment["end"])
+        except (KeyError, TypeError, ValueError):
+            logger.warning("Segment ohne gültige Zeiten übersprungen")
+            continue
+        words = segment.get("words") or []
+        coerced = _coerce_karaoke_words(words, seg_start, segment.get("end")) \
+            if words else []
+        captions.append(RenderCaption(
+            text=segment.get("text", ""),
+            words=tuple(
+                RenderWord(word=text, start=start, end=end)
+                for text, start, end, _next in coerced),
+            start=seg_start,
+            end=seg_end,
+            style=MappingProxyType(dict(style)),
+            layout=MappingProxyType(dict(layout)),
+            lines=assign_lines(
+                [RenderWord(word=text, start=start, end=end)
+                 for text, start, end, _next in coerced],
+                int(layout.get("max_words_per_line", 5)),
+                layout.get("chars_per_line")),
+        ))
+    return tuple(captions)
+
+
+def ass_from_captions(captions) -> list[str]:
+    """Serialisiert RenderCaptions zu ASS-Dialogue-TEXTEN (Block 17).
+
+    Liest Pop-Parameter und Limits aus den Caption-Snapshots (dort liegen
+    exakt die Werte, die generate_ass() auch direkt verwenden würde).
+    Leere Texte -> "" (Aufrufer überspringt wie bisher).
+    """
+    texts = []
+    for cap in captions:
+        st = cap.style
+        lo = cap.layout
+        if not cap.words:
+            texts.append(escape_ass_text(cap.text))
+            continue
+        try:
+            pop_enabled = bool(st.get("pop_enabled", True))
+            pop_scale = int(st.get("pop_scale", 112))
+            pop_decay = int(st.get("pop_decay_ms", 150))
+            max_per_line = int(lo.get("max_words_per_line", 5))
+        except (TypeError, ValueError):
+            pop_enabled, pop_scale, pop_decay, max_per_line = True, 112, 150, 5
+        chars_limit = lo.get("chars_per_line")
+        raw = [{"word": w.word, "start": w.start, "end": w.end}
+               for w in cap.words]
+        coerced = _coerce_karaoke_words(raw, cap.start, cap.end)
+        parts, lens = _render_karaoke_parts(
+            coerced, cap.start,
+            pop_enabled=pop_enabled, pop_scale=pop_scale,
+            pop_decay_ms=pop_decay)
+        texts.append(_join_karaoke_lines(parts, lens, max_per_line, chars_limit))
+    return texts
 
 
 class CaptionRenderer:
@@ -180,21 +358,25 @@ class CaptionRenderer:
         """
         Konvertiert Sekunden in ASS-Zeitformat (H:MM:SS.cc).
 
+        Rundet mathematisch korrekt auf Zentisekunden (C7): Überläufe
+        werden weitergetragen (z.B. 0.999 -> 0:00:01.00 statt bisher
+        fälschlich 0:00:00.99), Minuten-/Stundenüberlauf inklusive.
+        Das Ergebnis enthält dadurch niemals ungültige ".100".
+        Negative/ungültige Eingaben -> 0:00:00.00 (niemals Crash).
+
         Args:
             seconds: Zeit in Sekunden
 
         Returns:
             Zeitstring im ASS-Format
         """
-        if seconds < 0:
-            seconds = 0.0
-        hours = int(seconds // 3600)
-        minutes = int((seconds % 3600) // 60)
-        secs = int(seconds % 60)
-        centis = int(round((seconds - int(seconds)) * 100))
-        # Rundungsüberlauf abfangen (z.B. 0.999 -> 100 cs)
-        if centis >= 100:
-            centis = 99
+        try:
+            total_cs = round(max(0.0, float(seconds)) * 100)
+        except (TypeError, ValueError):
+            total_cs = 0
+        hours, rem = divmod(total_cs, 360000)
+        minutes, rem = divmod(rem, 6000)
+        secs, centis = divmod(rem, 100)
         return f"{hours}:{minutes:02d}:{secs:02d}.{centis:02d}"
 
     def _build_karaoke_text(self, segment: dict) -> str:
@@ -203,7 +385,12 @@ class CaptionRenderer:
 
         Die Dauer jedes Karaoke-Tags basiert auf dem tatsächlichen Start des
         nächsten Wortes (bzw. Segmentende beim letzten Wort) – nicht auf
-        gleichmäßig verteilten Intervallen.
+        gleichmäßig verteilten Intervallen. Usertext (Wörter/Segmenttext)
+        wird via escape_ass_text() escapet; Renderer-Tags (\\k, \\t) bleiben
+        roh und valide.
+
+        Delegiert an den Shared Core (_coerce_karaoke_words +
+        _render_karaoke_parts); keine eigene Mathematik mehr hier.
 
         Args:
             segment: Segment-Dict mit "start", "end" und "words"
@@ -213,38 +400,16 @@ class CaptionRenderer:
         """
         words = segment.get("words") or []
         if not words:
-            return segment.get("text", "")
+            return escape_ass_text(segment.get("text", ""))
 
         seg_start = float(segment["start"])
         seg_end = segment.get("end")
-        parts = []
-        word_lengths = []
-        n = len(words)
-        for i, w in enumerate(words):
-            word_start = float(w["start"])
-            word_end = float(w.get("end", word_start))
-            if i + 1 < n:
-                try:
-                    next_start = float(words[i + 1]["start"])
-                except (KeyError, TypeError, ValueError):
-                    next_start = word_end
-            else:
-                next_start = float(seg_end) if _valid_time_range(word_start, seg_end) else word_end
-            # Karaoke-Dauer immer positiv halten (min. 1 Zentisekunde)
-            duration_cs = max(1, int(round((max(next_start, word_end) - word_start) * 100)))
-
-            # Pop/Scale-Effekt: \t-Zeiten sind ms relativ zum Dialogue-Start.
-            # Hochskalieren während das Wort gesprochen wird, danach zurück auf 100 %.
-            t_up = max(0, int(round((word_start - seg_start) * 1000)))
-            t_down = max(t_up + 1, int(round((word_end - seg_start) * 1000)))
-            t_back = t_down + self.pop_decay_ms
-            pop_tag = (
-                f"{{\\t({t_up},{t_down},\\fscx{self.pop_scale}\\fscy{self.pop_scale})"
-                f"\\t({t_down},{t_back},\\fscx100\\fscy100)}}"
-                if self.pop_enabled else ""
-            )
-            parts.append(f"{{\\k{duration_cs}}}{pop_tag}{w['word']}")
-            word_lengths.append(len(w["word"]))
+        coerced = _coerce_karaoke_words(words, seg_start, seg_end)
+        parts, word_lengths = _render_karaoke_parts(
+            coerced, seg_start,
+            pop_enabled=self.pop_enabled,
+            pop_scale=self.pop_scale,
+            pop_decay_ms=self.pop_decay_ms)
 
         return self._apply_line_breaks(parts, word_lengths)
 
@@ -254,6 +419,7 @@ class CaptionRenderer:
 
         Berücksichtigt sowohl max_words_per_line als auch eine geschätzte
         Zeichenbreite (chars_per_line), da Wörter unterschiedlich lang sind.
+        Delegiert an _join_karaoke_lines (Shared Core, keine eigene Logik).
 
         Args:
             parts: Liste von Karaoke-Wort-Strings
@@ -262,33 +428,10 @@ class CaptionRenderer:
         Returns:
             Zeilen als String, verbunden mit ASS-Zeilenumbruch \\N
         """
-        n = len(parts)
-        lengths = word_lengths if word_lengths else [0] * n
-        max_per_line = max(1, self.max_words_per_line)
-        chars_limit = getattr(self, "chars_per_line", None)
-
-        # Größtes erstes-Zeilen-Ende finden, das beide Limits einhält
-        cut = n
-        word_count = 0
-        char_acc = 0
-        for i in range(n):
-            add_chars = lengths[i] + (1 if i > 0 else 0)
-            if word_count >= max_per_line:
-                cut = i
-                break
-            if chars_limit is not None and i > 0 and char_acc + add_chars > chars_limit:
-                cut = i
-                break
-            word_count += 1
-            char_acc += add_chars
-
-        if cut >= n:
-            return " ".join(parts)
-
-        return "\\N".join([
-            " ".join(parts[:cut]),
-            " ".join(parts[cut:])
-        ])
+        return _join_karaoke_lines(
+            parts, word_lengths,
+            max_words_per_line=self.max_words_per_line,
+            chars_per_line=getattr(self, "chars_per_line", None))
 
     def generate_ass(
         self,
@@ -325,11 +468,34 @@ class CaptionRenderer:
                 f"font={font_size}, marginV={margin_v}, "
                 f"wörter/zeile={self.max_words_per_line}, zeichen/zeile={self.chars_per_line}"
             )
+            layout_snapshot = dict(layout)
         else:
             play_res_x, play_res_y = 720, 1280
             font_size = self.font_size
             margin_v = self.margin_v
             self.chars_per_line = None
+            layout_snapshot = {
+                "play_res_x": play_res_x, "play_res_y": play_res_y,
+                "font_size": font_size, "margin_v": margin_v,
+                "max_words_per_line": self.max_words_per_line,
+                "chars_per_line": None,
+            }
+
+        # Block 17: interne RenderCaptions (rohe ASS-Style-Werte, KEIN
+        # from_dict – das würde &H-Farben auf Defaults zurücksetzen).
+        style_snapshot = {
+            "normal_color": self.normal_color,
+            "highlight_color": self.highlight_color,
+            "outline_color": self.outline_color,
+            "shadow_color": self.shadow_color,
+            "font_name": self.font_name,
+            "font_size": self.font_size,
+            "pop_enabled": self.pop_enabled,
+            "pop_scale": self.pop_scale,
+            "pop_decay_ms": self.pop_decay_ms,
+        }
+        captions = _captions_for_ass(segments, style_snapshot, layout_snapshot)
+        texts = ass_from_captions(captions)
 
         header = f"""[Script Info]
 Title: Capti Captions
@@ -348,14 +514,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
 
         lines = [header]
-        for segment in segments:
-            try:
-                seg_start = float(segment["start"])
-                seg_end = float(segment["end"])
-            except (KeyError, TypeError, ValueError):
-                logger.warning("Segment ohne gültige Zeiten übersprungen")
-                continue
-            text = self._build_karaoke_text(segment)
+        for cap, text in zip(captions, texts):
+            seg_start, seg_end = cap.start, cap.end
             if not text:
                 continue
             # Garantie: Dialogue-Ende immer echt nach dem Start
@@ -368,7 +528,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             )
 
         newline = chr(10)
-        with open(output_path, "w", encoding="utf-8-sig") as f:
+        # Block 11: normales UTF-8 ohne BOM (manche ASS-Parser stolpern über BOM)
+        with open(output_path, "w", encoding="utf-8") as f:
             f.write(newline.join(lines) + newline)
 
         logger.info(f"ASS-Datei erfolgreich erstellt: {output_path} ({len(segments)} Segmente)")

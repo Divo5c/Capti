@@ -23,6 +23,14 @@ datas = [
     (str(PROJECT_DIR / "translations.json"), "."),
 ]
 
+# Marken-Fonts (B3): ui/fonts.py erwartet sie im Frozen-Modus unter
+# sys._MEIPASS/assets/fonts – exakt die 4 Dateien aus assets/fonts/,
+# keine unnoetigen Fonts.
+_font_dir = PROJECT_DIR / "assets" / "fonts"
+for _font_file in sorted(_font_dir.glob("*")):
+    if _font_file.is_file():
+        datas.append((str(_font_file), "assets/fonts"))
+
 # CustomTkinter bringt Theme-/Asset-Dateien mit, die zur Laufzeit benötigt werden
 datas += collect_data_files("customtkinter")
 
@@ -30,9 +38,19 @@ datas += collect_data_files("customtkinter")
 datas += collect_data_files("tkinterdnd2")
 
 # --- FFmpeg-Binary von imageio-ffmpeg explizit mitliefern -------------------
-# (imageio-ffmpeg liefert KEIN ffprobe – get_video_info() bleibt optional)
 ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
 binaries = [(ffmpeg_exe, "imageio_ffmpeg/binaries")]
+
+# --- ffprobe für portable Builds (A3) ---------------------------------------
+# tools/fetch_ffprobe.py lädt es zur Build-Zeit nach third_party/ffprobe/.
+# Fehlt es (z.B. Fetch übersprungen), warnt der Build nur – die App fällt
+# zur Laufzeit ehrlich auf System-ffprobe bzw. das 720x1280-Fallback zurück.
+_ffprobe_exe = PROJECT_DIR / "third_party" / "ffprobe" / "ffprobe.exe"
+if _ffprobe_exe.exists():
+    binaries.append((str(_ffprobe_exe), "."))
+else:
+    print("WARNUNG: third_party/ffprobe/ffprobe.exe fehlt – "
+          "Build läuft ohne gebündeltes ffprobe (siehe tools/fetch_ffprobe.py).")
 
 # --- Hidden Imports ---------------------------------------------------------
 hiddenimports = []

@@ -43,7 +43,9 @@ def run(cmd: list) -> None:
 
 def main() -> None:
     version = get_version()
-    zip_name = f"Capti-v{version}-Windows.zip"
+    # Plattform im ZIP-Namen kennzeichnen (kein Linux-Build als Windows ausgeben)
+    platform_tag = "Windows" if sys.platform == "win32" else sys.platform
+    zip_name = f"Capti-v{version}-{platform_tag}.zip"
     zip_path = PROJECT_DIR / zip_name
 
     # 1. Alte Artefakte entfernen
@@ -55,11 +57,22 @@ def main() -> None:
     # 2. uv-Umgebung synchronisieren
     run(["uv", "sync"])
 
+    # 2b. ffprobe für portable Builds laden (A3; third_party/, gitignored).
+    # Schlägt der Fetch fehl (z.B. offline), läuft der Build trotzdem weiter –
+    # Capti.spec warnt und die App nutzt zur Laufzeit System-ffprobe/Fallback.
+    fetch = PROJECT_DIR / "tools" / "fetch_ffprobe.py"
+    try:
+        run([sys.executable, str(fetch)])
+    except subprocess.CalledProcessError:
+        print("WARNUNG: ffprobe-Fetch fehlgeschlagen – weiter ohne gebündeltes ffprobe.")
+
     # 3. PyInstaller-Build (One-Folder)
     run(["uv", "run", "pyinstaller", "Capti.spec", "--noconfirm"])
 
-    if not (APP_DIR / "Capti.exe").exists():
-        raise RuntimeError("Build fehlgeschlagen: Capti.exe nicht gefunden")
+    # Binary-Name ist plattformabhängig (Windows: Capti.exe, sonst Capti)
+    exe_name = "Capti.exe" if sys.platform == "win32" else "Capti"
+    if not (APP_DIR / exe_name).exists():
+        raise RuntimeError(f"Build fehlgeschlagen: {exe_name} nicht gefunden")
 
     # 4. README.txt in die Distribution kopieren
     readme_src = PROJECT_DIR / "README.txt"

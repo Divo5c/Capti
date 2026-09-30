@@ -1,8 +1,9 @@
 """
 Capti History: dauerhafte Speicherung verarbeiteter Videos.
 
-UI-unabhängiger HistoryManager; Daten liegen unter
-%APPDATA%/Capti/history.json (ISO-Zeitstempel, max. 10 Einträge).
+UI-unabhängiger HistoryManager; Daten liegen im plattformgerechten
+Capti-Datenverzeichnis (Windows: %APPDATA%/Capti/history.json;
+ISO-Zeitstempel, max. 10 Einträge).
 
 Robust gegen fehlende/kaputte Dateien – die App stürzt nie wegen History.
 """
@@ -12,11 +13,13 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
+from capti_core.paths import user_data_dir
+
 MAX_ENTRIES = 10
 
 
 def _history_file() -> Path:
-    return Path(os.environ.get("APPDATA", str(Path.home()))) / "Capti" / "history.json"
+    return user_data_dir() / "history.json"
 
 
 def _read_history() -> list:

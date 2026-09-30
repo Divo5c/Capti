@@ -7,6 +7,9 @@ import os
 import subprocess
 import logging
 import shutil
+import sys
+import threading
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -15,17 +18,96 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+class CancelledError(Exception):
+    """Abbruch angefordert (Cancel-Event gesetzt, B2)."""
+
+
+# Timeout für terminate() -> kill()-Fallback bei Cancel (Sekunden)
+_CANCEL_KILL_TIMEOUT = 5.0
+# Poll-Intervall für Cancel/Timeout-Überwachung (Sekunden)
+_POLL_INTERVAL = 0.2
+
+
+def resolve_ffprobe_exe(ffmpeg_path: str = "ffmpeg", project_root: Optional[Path] = None) -> Optional[str]:
+    """Loest den ffprobe-Pfad portabel auf (Development + Frozen).
+
+    Reihenfolge (erste vorhandene Datei gewinnt):
+    1. CAPTI_FFPROBE (Env-Override, Tests/manuelle Pfade)
+    2. Frozen: sys._MEIPASS/ffprobe(.exe) (PyInstaller-Bundle, A3)
+    3. Dev: <project>/third_party/ffprobe/ffprobe(.exe) (Build-Time-Fetch)
+    4. Neben der imageio-ffmpeg-Binary (zukunftssicher, falls dort mal ffprobe liegt)
+    5. System-PATH ("ffprobe") – nur sinnvoller Fallback, keine angenommene Runtime-Abhängigkeit
+
+    Returns:
+        Pfad als String oder None, wenn nirgends ein ffprobe gefunden wurde.
+    """
+    override = os.environ.get("CAPTI_FFPROBE")
+    if override and Path(override).exists():
+        return str(Path(override))
+
+    exe_names = ("ffprobe.exe", "ffprobe")
+
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            for name in exe_names:
+                cand = Path(meipass) / name
+                if cand.exists():
+                    return str(cand)
+
+    root = Path(project_root) if project_root is not None else Path(__file__).resolve().parent
+    for name in exe_names:
+        cand = root / "third_party" / "ffprobe" / name
+        if cand.exists():
+            return str(cand)
+
+    try:
+        import imageio_ffmpeg
+        sibling_dir = Path(imageio_ffmpeg.get_ffmpeg_exe()).parent
+        for name in exe_names:
+            cand = sibling_dir / name
+            if cand.exists():
+                return str(cand)
+    except Exception:
+        pass  # imageio-ffmpeg optional – weiter zum PATH-Fallback
+
+    found = shutil.which("ffprobe")
+    if found:
+        return found
+    return None
+
+
+def escape_filter_path(path: str) -> str:
+    """Escapet einen Dateipfad für den ffmpeg-subtitles-Filter (C5).
+
+    Exakte Grenze: Python -> Filtergraph-String in `subtitles='...'`:
+    - Backslash -> Slash (Windows-Trenner neutralisieren, ZUERST)
+    - ':' -> '\\:' (Laufwerks-Doppelpunkt ist Filter-Trenner)
+    - "'" -> "\\'" (einziges Zeichen, das Single-Quoting bricht)
+    Leerzeichen, ()[];, Unicode/Umlaute etc. sind innerhalb '...' literal
+    und werden bewusst NICHT escapet.
+    """
+    text = str(path).replace("\\", "/")
+    text = text.replace(":", "\\:")
+    text = text.replace("'", "\\'")
+    return text
+
+
 class VideoProcessor:
     """Klasse für Video-Verarbeitung mit ffmpeg."""
 
-    def __init__(self, ffmpeg_path: str = "ffmpeg"):
+    def __init__(self, ffmpeg_path: str = "ffmpeg", cancel_event=None):
         """
         Initialisiert den VideoProcessor.
 
         Args:
             ffmpeg_path: Pfad zur ffmpeg-Executable (Standard: "ffmpeg" im PATH)
+            cancel_event: Optionales threading.Event für Abbruch (B2, sonst None)
         """
         self.ffmpeg_path = ffmpeg_path
+        self._cancel_event = cancel_event
+        self._current_process = None
+        self._proc_lock = threading.Lock()
         # Fallback: Wenn ffmpeg nicht im PATH gefunden wird, verwende die
         # mit imageio-ffmpeg gebündelte Binary (projektlokal, keine Systeminstallation nötig).
         if shutil.which(ffmpeg_path) is None:
@@ -69,6 +151,112 @@ class VideoProcessor:
             logger.error("ffmpeg Timeout beim Versionscheck")
             raise FileNotFoundError("ffmpeg antwortet nicht (Timeout)")
 
+    def bind_cancel(self, cancel_event) -> None:
+        """Verdrahtet ein Cancel-Event der Pipeline (B2, idempotent)."""
+        try:
+            self._cancel_event = cancel_event
+        except Exception:
+            pass
+
+    def request_cancel(self) -> None:
+        """Fordert Abbruch an und beendet ggf. laufenden ffmpeg (idempotent)."""
+        try:
+            if self._cancel_event is None:
+                import threading as _t
+                self._cancel_event = _t.Event()
+            self._cancel_event.set()
+        except Exception:
+            pass
+        proc = None
+        try:
+            with self._proc_lock:
+                proc = self._current_process
+        except Exception:
+            proc = None
+        if proc is not None:
+            try:
+                if proc.poll() is None:
+                    proc.terminate()
+            except Exception:
+                pass
+
+    def _run_cmd(self, cmd, timeout):
+        """Wie subprocess.run(capture_output, text, timeout), aber abbrechbar (B2).
+
+        - Cancel-Event gesetzt -> terminate(), nach kurzem Timeout kill(),
+          danach CancelledError (kein Zombie, kein Deadlock: Pipes werden
+          via communicate() drainiert).
+        - Timeout-Ueberschreitung -> subprocess.TimeoutExpired (wie bisher).
+        """
+        deadline = time.monotonic() + timeout if timeout else None
+        # FileNotFoundError (Binary fehlt) propagiert unverändert wie bisher.
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            with self._proc_lock:
+                self._current_process = proc
+        except Exception:
+            pass
+        try:
+            while True:
+                cancelled = False
+                try:
+                    cancelled = bool(self._cancel_event is not None
+                                    and self._cancel_event.is_set())
+                except Exception:
+                    cancelled = False
+                if cancelled:
+                    raise CancelledError("Verarbeitung abgebrochen")
+                remaining = None
+                if deadline is not None:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                        try:
+                            proc.communicate(timeout=_CANCEL_KILL_TIMEOUT)
+                        except Exception:
+                            pass
+                        raise subprocess.TimeoutExpired(cmd, timeout)
+                try:
+                    step = _POLL_INTERVAL
+                    if remaining is not None and remaining < step:
+                        step = max(0.01, remaining)
+                    out, err = proc.communicate(timeout=step)
+                    return subprocess.CompletedProcess(
+                        cmd, proc.returncode, out, err)
+                except subprocess.TimeoutExpired:
+                    continue  # erneut Cancel/Deadline pruefen
+        except CancelledError:
+            try:
+                if proc.poll() is None:
+                    proc.terminate()
+            except Exception:
+                pass
+            try:
+                proc.communicate(timeout=_CANCEL_KILL_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                try:
+                    proc.communicate(timeout=_CANCEL_KILL_TIMEOUT)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+            raise
+        finally:
+            try:
+                with self._proc_lock:
+                    if self._current_process is proc:
+                        self._current_process = None
+            except Exception:
+                pass
+
     def extract_audio(self, video_path: str, output_path: str = None) -> str:
         """
         Extrahiert Audio aus einer Videodatei als WAV (16kHz, mono) für Whisper.
@@ -103,12 +291,7 @@ class VideoProcessor:
         ]
 
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=300  # 5 Minuten Timeout
-            )
+            result = self._run_cmd(cmd, timeout=300)  # 5 Minuten Timeout
 
             if result.returncode != 0:
                 logger.error(f"ffmpeg Fehler: {result.stderr}")
@@ -123,73 +306,6 @@ class VideoProcessor:
         except subprocess.TimeoutExpired:
             logger.error("Timeout bei Audio-Extraktion")
             raise RuntimeError("Audio-Extraktion Timeout (5 Minuten überschritten)")
-
-    def embed_subtitles(self, video_path: str, srt_path: str, output_path: str = None) -> str:
-        """
-        Bettet SRT-Untertitel hart in das Video ein (neue MP4-Datei).
-
-        Args:
-            video_path: Pfad zur Eingabe-Videodatei
-            srt_path: Pfad zur SRT-Untertiteldatei
-            output_path: Pfad für die Ausgabe-Videodatei (optional, wird automatisch generiert)
-
-        Returns:
-            Pfad zur Ausgabedatei mit eingebetteten Untertiteln
-        """
-        if not os.path.exists(video_path):
-            raise FileNotFoundError(f"Videodatei nicht gefunden: {video_path}")
-        if not os.path.exists(srt_path):
-            raise FileNotFoundError(f"SRT-Datei nicht gefunden: {srt_path}")
-
-        if output_path is None:
-            video_stem = Path(video_path).stem
-            output_dir = Path(video_path).parent
-            output_path = str(output_dir / f"{video_stem}_subtitled.mp4")
-
-        logger.info(f"Bette Untertitel ein: {video_path} + {srt_path} -> {output_path}")
-
-        # SRT-Pfad für ffmpeg escapen (Windows-Pfade mit Backslashes und Doppelpunkten)
-        srt_escaped = srt_path.replace("\\", "/").replace(":", "\\:")
-
-        # ffmpeg-Befehl: Video + SRT -> MP4 mit eingebetteten Untertiteln
-        # Verwende subtitles-Filter für hartes Einbrennen (burn-in)
-        cmd = [
-            self.ffmpeg_path,
-            "-y",  # Überschreiben ohne Nachfrage
-            "-i", video_path,
-            "-vf", f"subtitles='{srt_escaped}':force_style='FontSize=24,PrimaryColour=&HFFFFFF,OutlineColour=&H000000,BorderStyle=1,Outline=2,Shadow=1'",
-            "-c:v", "libx264",  # H.264 Video-Codec
-            "-preset", "medium",  # Encoding-Preset
-            "-crf", "23",  # Qualitätsfaktor (18-28, niedriger = besser)
-            "-c:a", "aac",  # AAC Audio-Codec
-            "-b:a", "128k",  # Audio-Bitrate
-            "-movflags", "+faststart",  # Für Web-Streaming optimieren
-            output_path
-        ]
-
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=600  # 10 Minuten Timeout
-            )
-
-            if result.returncode != 0:
-                logger.error(f"ffmpeg Fehler: {result.stderr}")
-                # Fallback: Versuche ohne Styling
-                logger.info("Versuche Fallback ohne Styling...")
-                return self._embed_subtitles_fallback(video_path, srt_path, output_path)
-
-            if not os.path.exists(output_path):
-                raise RuntimeError("Ausgabe-Video wurde nicht erstellt")
-
-            logger.info(f"Untertitel erfolgreich eingebettet: {output_path}")
-            return output_path
-
-        except subprocess.TimeoutExpired:
-            logger.error("Timeout bei Untertitel-Einbettung")
-            raise RuntimeError("Untertitel-Einbettung Timeout (10 Minuten überschritten)")
 
     def embed_ass(self, video_path: str, ass_path: str, output_path: str = None) -> str:
         """
@@ -217,7 +333,7 @@ class VideoProcessor:
 
         logger.info(f"Bette ASS-Untertitel ein: {video_path} + {ass_path} -> {output_path}")
 
-        ass_escaped = ass_path.replace("\\", "/").replace(":", "\\:")
+        ass_escaped = escape_filter_path(ass_path)
 
         cmd = [
             self.ffmpeg_path,
@@ -234,12 +350,7 @@ class VideoProcessor:
         ]
 
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=600
-            )
+            result = self._run_cmd(cmd, timeout=600)
 
             if result.returncode != 0:
                 logger.error(f"ffmpeg Fehler: {result.stderr}")
@@ -255,51 +366,6 @@ class VideoProcessor:
             logger.error("Timeout bei ASS-Einbettung")
             raise RuntimeError("ASS-Einbettung Timeout (10 Minuten überschritten)")
 
-    def _embed_subtitles_fallback(self, video_path: str, srt_path: str, output_path: str) -> str:
-        """
-        Fallback-Methode für Untertitel-Einbettung ohne komplexes Styling.
-
-        Args:
-            video_path: Pfad zur Eingabe-Videodatei
-            srt_path: Pfad zur SRT-Untertiteldatei
-            output_path: Pfad für die Ausgabe-Videodatei
-
-        Returns:
-            Pfad zur Ausgabedatei
-        """
-        srt_escaped = srt_path.replace("\\", "/").replace(":", "\\:")
-
-        cmd = [
-            self.ffmpeg_path,
-            "-y",
-            "-i", video_path,
-            "-vf", f"subtitles='{srt_escaped}'",
-            "-c:v", "libx264",
-            "-preset", "medium",
-            "-crf", "23",
-            "-c:a", "aac",
-            "-b:a", "128k",
-            "-movflags", "+faststart",
-            output_path
-        ]
-
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=600
-        )
-
-        if result.returncode != 0:
-            logger.error(f"Fallback auch fehlgeschlagen: {result.stderr}")
-            raise RuntimeError(f"Untertitel-Einbettung fehlgeschlagen: {result.stderr}")
-
-        if not os.path.exists(output_path):
-            raise RuntimeError("Ausgabe-Video wurde nicht erstellt")
-
-        logger.info(f"Untertitel erfolgreich eingebettet (Fallback): {output_path}")
-        return output_path
-
     def get_video_info(self, video_path: str) -> dict:
         """
         Ermittelt Video-Informationen mit ffprobe.
@@ -313,9 +379,13 @@ class VideoProcessor:
         if not os.path.exists(video_path):
             raise FileNotFoundError(f"Videodatei nicht gefunden: {video_path}")
 
-        ffprobe_path = self.ffmpeg_path.replace("ffmpeg", "ffprobe")
-        if not shutil.which(ffprobe_path):
-            ffprobe_path = "ffprobe"
+        ffprobe_path = resolve_ffprobe_exe(self.ffmpeg_path)
+        if ffprobe_path is None:
+            logger.warning(
+                "ffprobe nicht gefunden (weder gebuendelt noch im PATH) – "
+                "Videoinformationen nicht verfuegbar. Das ASS-Layout faellt "
+                "auf 720x1280 zurueck.")
+            return {}
 
         cmd = [
             ffprobe_path,
@@ -327,7 +397,7 @@ class VideoProcessor:
         ]
 
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            result = self._run_cmd(cmd, timeout=30)
             if result.returncode != 0:
                 logger.warning(f"ffprobe Fehler: {result.stderr}")
                 return {}

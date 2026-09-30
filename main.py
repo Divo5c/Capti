@@ -46,8 +46,9 @@ def app_base_dir() -> Path:
 
 
 def app_config_dir() -> Path:
-    """Benutzerkonfigurations-Verzeichnis: %APPDATA%\\Capti."""
-    config_dir = Path(os.environ.get("APPDATA", str(Path.home()))) / "Capti"
+    """Benutzerkonfigurations-Verzeichnis (plattformunabhängig, siehe capti_core.paths)."""
+    from capti_core.paths import user_data_dir
+    config_dir = user_data_dir()
     config_dir.mkdir(parents=True, exist_ok=True)
     return config_dir
 
@@ -66,8 +67,13 @@ if not CONFIG_FILE.exists() and _legacy_config.exists():
     except Exception:
         pass  # Fallback: Defaults werden verwendet
 
-# Temp-Ordner Pfad (neben der Anwendung, nicht im schreibgeschützten Bundle)
-TEMP_DIR = app_base_dir() / "_temp"
+# Temp-Ordner: System-Temp/Capti (B5) – NICHT neben EXE/Projektordner,
+# dort ist z.B. unter Programme nicht schreibbar. Nur Zwischendateien.
+try:
+    from capti_core.paths import temp_dir as _capti_temp_dir
+    TEMP_DIR = _capti_temp_dir()
+except Exception:
+    TEMP_DIR = app_base_dir() / "_temp"
 
 
 class TranslationManager:
@@ -165,12 +171,22 @@ class ConfigManager:
         return new_theme
 
     def save_config(self):
-        """Speichert Theme in config.json."""
+        """Speichert Theme in config.json (Merge, kein Datenverlust).
+
+        Bestehende Keys (name, model, caption_style, ...) bleiben erhalten;
+        nur theme wird aktualisiert – identisch zu TranslationManager.
+        Kaputtes JSON -> Defaults.
+        """
         try:
             config = {}
             if CONFIG_FILE.exists():
-                with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                    config = json.load(f)
+                try:
+                    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                        loaded = json.load(f)
+                    if isinstance(loaded, dict):
+                        config = loaded
+                except Exception:
+                    config = {}  # kaputte Config -> Defaults, Keys nicht rettbar
             config["theme"] = self.current_theme
             with open(CONFIG_FILE, "w", encoding="utf-8") as f:
                 json.dump(config, f, indent=2)
@@ -184,7 +200,11 @@ class CaptiApp:
     def __init__(self, root: ctk.CTk):
         self.root = root
         self.root.title("Capti")
-        self.root.geometry("800x700")
+        # C4: Startgroesse darf nicht kleiner als minsize sein (Tk wuerde
+        # sonst stillschweigend clampen). minsize bleibt, weil das Legacy-
+        # Layout keinen Scroll-Container hat und kleinere Fenster Controls
+        # unerreichbar clippen wuerden.
+        self.root.geometry("1135x1160")
         self.root.minsize(1135, 1160)
 
         # Temp-Ordner beim Start bereinigen
@@ -429,16 +449,9 @@ class CaptiApp:
         )
         self.translate_label.grid(row=4, column=0, sticky="w", padx=20, pady=(0, 10))
 
-        self.translate_var = ctk.StringVar(value="none")
-        self.translate_combo = ctk.CTkComboBox(
-            self.step2_frame,
-            variable=self.translate_var,
-            values=["none", "en", "es", "fr", "it", "pt", "nl", "pl", "ru", "ja", "ko", "zh"],
-            width=120,
-            height=32,
-            font=ctk.CTkFont(size=12)
-        )
-        self.translate_combo.grid(row=4, column=1, sticky="w", padx=20, pady=(0, 15))
+        # Hinweis: translate_var/translate_combo (Block 12) entfernt –
+        # die Auswahl wurde nie gelesen (_process_video ignorierte sie).
+        # Das Label bleibt als Platzhalter für die geplante Übersetzung.
 
         # --- Schritt 3: Verarbeitung ---
         self.step3_frame = ctk.CTkFrame(self.main_frame)
@@ -686,6 +699,7 @@ class CaptiApp:
             on_log=lambda level, msg: self._ui_queue.put(("log", (level, msg))),
             on_done=lambda path: self._ui_queue.put(("done", path)),
             on_error=lambda err: self._ui_queue.put(("error", err)),
+            on_cancelled=lambda msg: self._ui_queue.put(("cancelled", msg)),
         )
         self.pipeline.run_async(self.video_path, model_size=model_size, language=language)
 
@@ -704,6 +718,8 @@ class CaptiApp:
                     self._on_pipeline_done(payload)
                 elif kind == "error":
                     self._processing_error(payload)
+                elif kind == "cancelled":
+                    self._processing_cancelled(payload)
         except queue.Empty:
             pass
         self.root.after(100, self._poll_ui_queue)
@@ -731,6 +747,14 @@ class CaptiApp:
         self.progress_var.set(0)
         self.status_var.set("Fehler aufgetreten.")
         messagebox.showerror("Verarbeitungsfehler", f"Ein Fehler ist aufgetreten:\n\n{error_msg}")
+
+    def _processing_cancelled(self, message: str = ""):
+        """Abbruch (B2): kein Fehlerdialog, Buttons werden freigegeben."""
+        self.is_processing = False
+        self.btn_generate.configure(state="normal")
+        self.btn_select_video.configure(state="normal")
+        self.btn_save.configure(state="disabled")
+        self.status_var.set(self.translation_mgr.get("status_cancelled"))
 
     def _save_output_video(self):
         """Speichert das fertige Video an einem benutzerdefinierten Ort."""
@@ -811,6 +835,13 @@ class CaptiApp:
 
     def _on_closing(self):
         """Wird aufgerufen, wenn das Fenster geschlossen wird."""
+        try:
+            # Laufende Verarbeitung abbrechen (B2, nicht blockierend –
+            # der UI-Thread friert nicht; ffmpeg wird per terminate beendet).
+            if getattr(self, "pipeline", None) is not None:
+                self.pipeline.cancel()
+        except Exception:
+            pass
         self._cleanup_temp_dir()
         self.root.destroy()
 

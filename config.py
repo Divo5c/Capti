@@ -1,8 +1,10 @@
 """
 Capti zentrale Config-Verwaltung (UI-unabhängig).
 
-Alle Lese-/Schreibzugriffe auf %APPDATA%/Capti/config.json laufen über
-dieses Modul. Garantien:
+Alle Lese-/Schreibzugriffe auf die Capti-config.json laufen über
+dieses Modul. Der Pfad wird plattformunabhängig über capti_core.paths
+aufgelöst (Windows: %APPDATA%/Capti – unverändert; andere Plattformen:
+plattformgerechte Datenverzeichnisse). Garantien:
 
 - Fehlende Datei -> sichere Defaults (leeres Dict)
 - Kaputtes JSON / kein Dict -> leeres Dict statt Crash
@@ -18,14 +20,15 @@ import os
 from pathlib import Path
 from typing import Any, Optional
 
+from capti_core.paths import user_data_dir
+
 
 def config_file() -> Path:
     """Pfad zur Capti-Config (Test-Override: CAPTI_CONFIG_FILE)."""
     override = os.environ.get("CAPTI_CONFIG_FILE")
     if override:
         return Path(override)
-    return (Path(os.environ.get("APPDATA", str(Path.home())))
-            / "Capti" / "config.json")
+    return user_data_dir() / "config.json"
 
 
 def load_config(path: Path = None) -> dict:
