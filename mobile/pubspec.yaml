@@ -1,0 +1,33 @@
+name: capti_mobile
+description: "Capti - lokale KI-Untertitel für Videos (mobile App)"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.13.1
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  # dart:ffi-Hilfsmittel (Utf8-Allokation) für die Whisper-Bridge
+  ffi: ^2.1.0
+  # Plattform-Integrationen (Laufzeit); Tests nutzen injizierbare Fakes
+  path_provider: ^2.1.4
+  file_picker: ^12.0.0
+  http: ^1.2.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    # Whisper-GGML-Modelle (multilingual, kein .en) – werden bei Bedarf
+    # aus dem APK in die App-Sandbox kopiert (siehe whisper_model.dart).
+    # Lege echte Dateien hier ab: assets/models/small.bin etc.
+    # Fehlen sie, bleibt der Pfad leer und die Pipeline wirft
+    # error.model_missing lokalisiert – keine Fake-.bin.
+    - assets/models/
