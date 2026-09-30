@@ -24,6 +24,82 @@ DEFAULTS = {"name": "", "theme": "dark", "language": "de", "model": "small"}
 THEME_CODES = ["dark", "light", "yellow"]
 LANGUAGE_CODES = ["de", "en"]
 
+# Timing-Nudge-Schrittweite (Block 34): einzige Definitionsstelle für
+# Default, Config-Key und Validierung. Buttons, Keyboard-Nudge und
+# Shortcut-Hint lesen den effektiven Wert über read_nudge_step().
+NUDGE_STEP_KEY = "nudge_step"
+NUDGE_STEP_DEFAULT = 0.05
+
+
+def parse_nudge_step(text) -> float | None:
+    """Parst eine Schrittweite (Komma/Punkt, Whitespace-tolerant).
+
+    Gültig: endlich, > 0. Sonst None (kein Crash bei Unsinn wie
+    "", 0, negativ, Text, NaN, Inf).
+    """
+    import math
+    try:
+        value = float(str(text).strip().replace(",", "."))
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(value) or value <= 0:
+        return None
+    return value
+
+
+def read_nudge_step(config: dict | None = None) -> float:
+    """Effektive Schrittweite aus der Config (ungültig/fehlend -> Default)."""
+    cfg = config if isinstance(config, dict) else _read_config()
+    parsed = parse_nudge_step(cfg.get(NUDGE_STEP_KEY))
+    return parsed if parsed is not None else NUDGE_STEP_DEFAULT
+
+
+# Preset-Auswahl (Block 35): genau einmal definierte UI-Auswahlwerte.
+# Presets schreiben NUR den Settings-Wert; gelesen wird ausschließlich
+# über read_nudge_step() (keine zweite effektive Quelle).
+NUDGE_STEP_PRESETS = (0.01, 0.05, 0.10, 0.50)
+
+
+# Snap-Toleranz (Block 41): einzige Definitionsstelle für Default,
+# Config-Key und Leser. Caption-/Word-Snap und Snap-Indikator lesen
+# den effektiven Wert über read_snap_tolerance() (live, ohne Neustart).
+# Validierung identisch zu nudge_step (endlich, > 0): parse_nudge_step
+# wiederverwenden statt duplizieren.
+SNAP_TOLERANCE_KEY = "snap_tolerance_px"
+SNAP_TOLERANCE_DEFAULT = 8.0
+
+# Snap-Toleranz-Presets (Block 42): genau einmal definierte Auswahlwerte.
+# Presets schreiben NUR den Settings-Wert; gelesen wird ausschließlich
+# über read_snap_tolerance() (keine zweite effektive Quelle).
+SNAP_TOLERANCE_PRESETS = (2.0, 4.0, 8.0, 16.0)
+
+
+def format_snap_preset(value: float) -> str:
+    """Preset-Anzeigetext mit Einheit (keine Komma-Lokalisierung nötig)."""
+    try:
+        text = f"{float(value):g}"
+    except (TypeError, ValueError):
+        text = "0"
+    return f"{text} px"
+
+
+def read_snap_tolerance(config: dict | None = None) -> float:
+    """Effektive Snap-Toleranz in px (ungültig/fehlend -> Default)."""
+    cfg = config if isinstance(config, dict) else _read_config()
+    parsed = parse_nudge_step(cfg.get(SNAP_TOLERANCE_KEY))
+    return parsed if parsed is not None else SNAP_TOLERANCE_DEFAULT
+
+
+def format_nudge_preset(value: float) -> str:
+    """Preset-Anzeigetext mit Einheit (DE: Komma)."""
+    try:
+        text = f"{float(value):.2f}"
+    except (TypeError, ValueError):
+        text = "0.00"
+    if i18n.get_language() == "de":
+        text = text.replace(".", ",")
+    return f"{text} s"
+
 
 def _theme_label(code: str) -> str:
     """Übersetztes Label für einen Theme-Code (Fallback: Code)."""
@@ -216,12 +292,117 @@ class SettingsScreen(Screen):
         self.model_combo.grid(row=2, column=0, sticky="w", padx=24, pady=(0, 16))
 
         # ----------------------------------------------------------
-        # Card 5 – Verlauf
+        # Card 5 – Timing-Schrittweite (Nudge, Block 34)
+        # ----------------------------------------------------------
+        nudge_card = ctk.CTkFrame(self, width=600, corner_radius=12,
+                                  fg_color=self.color("surface"),
+                                  border_width=1, border_color=self.color("border"))
+        nudge_card.grid(row=6, column=0, padx=24, pady=(0, 12))
+        nudge_card.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(nudge_card, text=i18n.t("set.nudge_title"),
+                     font=self.font("body", 15), anchor="w",
+                     text_color=self.color("text")).grid(
+            row=0, column=0, sticky="w", padx=24, pady=(16, 2))
+        ctk.CTkLabel(nudge_card, text=i18n.t("set.nudge_desc"),
+                     font=self.font("body", 11), anchor="w",
+                     text_color=self.color("text_secondary")).grid(
+            row=1, column=0, sticky="w", padx=24, pady=(0, 8))
+
+        self.nudge_entry = ctk.CTkEntry(nudge_card, width=180, height=36,
+                                        corner_radius=8,
+                                        font=self.font("technical", 13),
+                                        fg_color=self.color("surface_secondary"),
+                                        border_color=self.color("border"),
+                                        text_color=self.color("text"))
+        self.nudge_entry.grid(row=2, column=0, sticky="w", padx=24, pady=(0, 4))
+        # Auto-Save wie beim Namen: Enter/FocusOut validiert + speichert.
+        self.nudge_entry.bind("<Return>", lambda _e: self._save_nudge_step())
+        self.nudge_entry.bind("<FocusOut>", lambda _e: self._save_nudge_step())
+        self.nudge_status_label = ctk.CTkLabel(nudge_card, text="",
+                                               font=self.font("body", 12),
+                                               anchor="w",
+                                               text_color=self.color("error"))
+        self.nudge_status_label.grid(row=4, column=0, sticky="w", padx=24,
+                                     pady=(0, 16))
+        # Preset-Reihe (Block 35): 4 Buttons, aktiver = Accent-Füllung.
+        # Freie Werte (z.B. 0.15) markieren kein Preset.
+        self._preset_buttons = {}
+        preset_row = ctk.CTkFrame(nudge_card, fg_color="transparent")
+        preset_row.grid(row=3, column=0, sticky="w", padx=24, pady=(0, 8))
+        for col, preset in enumerate(NUDGE_STEP_PRESETS):
+            btn = ctk.CTkButton(
+                preset_row, text=format_nudge_preset(preset),
+                width=100, height=34,
+                font=self.font("body", 13), corner_radius=8,
+                fg_color="transparent", border_width=1,
+                border_color=self.color("border"),
+                text_color=self.color("text"),
+                command=lambda p=preset: self._on_preset_selected(p))
+            btn.grid(row=0, column=col, padx=(0, 8))
+            self._preset_buttons[preset] = btn
+
+        # ----------------------------------------------------------
+        # Card 6 – Snap-Toleranz (Block 41)
+        # ----------------------------------------------------------
+        snap_card = ctk.CTkFrame(self, width=600, corner_radius=12,
+                                 fg_color=self.color("surface"),
+                                 border_width=1, border_color=self.color("border"))
+        snap_card.grid(row=7, column=0, padx=24, pady=(0, 12))
+        snap_card.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(snap_card, text=i18n.t("set.snap_title"),
+                     font=self.font("body", 15), anchor="w",
+                     text_color=self.color("text")).grid(
+            row=0, column=0, sticky="w", padx=24, pady=(16, 2))
+        ctk.CTkLabel(snap_card, text=i18n.t("set.snap_desc"),
+                     font=self.font("body", 11), anchor="w",
+                     text_color=self.color("text_secondary")).grid(
+            row=1, column=0, sticky="w", padx=24, pady=(0, 8))
+
+        self.snap_entry = ctk.CTkEntry(snap_card, width=180, height=36,
+                                       corner_radius=8,
+                                       font=self.font("technical", 13),
+                                       fg_color=self.color("surface_secondary"),
+                                       border_color=self.color("border"),
+                                       text_color=self.color("text"))
+        self.snap_entry.grid(row=2, column=0, sticky="w", padx=24, pady=(0, 4))
+        # Auto-Save wie beim Namen: Enter/FocusOut validiert + speichert.
+        self.snap_entry.bind("<Return>", lambda _e: self._save_snap_tolerance())
+        self.snap_entry.bind("<FocusOut>", lambda _e: self._save_snap_tolerance())
+        self.snap_status_label = ctk.CTkLabel(snap_card, text="",
+                                              font=self.font("body", 12),
+                                              anchor="w",
+                                              text_color=self.color("error"))
+        self.snap_status_label.grid(row=3, column=0, sticky="w", padx=24,
+                                    pady=(0, 16))
+        # Preset-Reihe (Block 42): 4 Buttons, aktiver = Accent-Füllung.
+        # Freie Werte (z.B. 6 px) markieren kein Preset.
+        self._preset_buttons_snap = {}
+        preset_row = ctk.CTkFrame(snap_card, fg_color="transparent")
+        preset_row.grid(row=4, column=0, sticky="w", padx=24, pady=(0, 8))
+        for col, preset in enumerate(SNAP_TOLERANCE_PRESETS):
+            btn = ctk.CTkButton(
+                preset_row, text=format_snap_preset(preset),
+                width=100, height=34,
+                font=self.font("body", 13), corner_radius=8,
+                fg_color="transparent", border_width=1,
+                border_color=self.color("border"),
+                text_color=self.color("text"),
+                command=lambda p=preset: self._on_preset_selected_snap(p))
+            btn.grid(row=0, column=col, padx=(0, 8))
+            self._preset_buttons_snap[preset] = btn
+
+        # Ergänzend: aktuellen Wert markieren, falls er exakt einem Preset
+        # entspricht (wird in _refresh_snap_ui nachgeladen).
+
+        # ----------------------------------------------------------
+        # Card 7 – Verlauf
         # ----------------------------------------------------------
         history_card = ctk.CTkFrame(self, width=600, corner_radius=12,
                                     fg_color=self.color("surface"),
                                     border_width=1, border_color=self.color("border"))
-        history_card.grid(row=6, column=0, padx=24, pady=(0, 12))
+        history_card.grid(row=8, column=0, padx=24, pady=(0, 12))
         history_card.grid_columnconfigure(0, weight=1)
 
         ctk.CTkLabel(history_card, text=i18n.t("set.history_title"),
@@ -259,7 +440,7 @@ class SettingsScreen(Screen):
             border_color=self.color("border"),
             text_color=self.color("text"),
             command=lambda: self.navigate("home"))
-        btn_back.grid(row=7, column=0, pady=(16, 24))
+        btn_back.grid(row=9, column=0, pady=(16, 24))
 
         self.load_settings()
 
@@ -291,6 +472,16 @@ class SettingsScreen(Screen):
         # Modell (ungültig -> small)
         model = config.get("model", "small")
         self.model_var.set(model if model in MODEL_OPTIONS else "small")
+
+        # Nudge-Schrittweite (Anzeige wie gespeichert, Default bei Bedarf)
+        self.nudge_status_label.configure(text="")
+        self._refresh_nudge_ui(config)
+
+        # Snap-Toleranz (Anzeige wie gespeichert, Default bei Bedarf)
+        self.snap_status_label.configure(text="")
+        self.snap_entry.delete(0, "end")
+        self.snap_entry.insert(0, f"{read_snap_tolerance(config):g}")
+        self._refresh_snap_ui(config)
 
     # ------------------------------------------------------------------
     # Auto-Save-Handler (sofortige Anwendung + merge-sicheres Speichern)
@@ -328,6 +519,87 @@ class SettingsScreen(Screen):
         """Name merge-sicher speichern (Enter/FocusOut, kein Button)."""
         self._set_value("name", self.name_entry.get().strip())
 
+    def _refresh_nudge_ui(self, config: dict | None = None):
+        """Entry + Preset-Markierung aus effektivem Wert (Block 35).
+
+        Exakter Preset-Treffer -> Accent-Füllung; freier Wert (z.B.
+        0.15) -> kein Preset aktiv, Entry zeigt den freien Wert.
+        """
+        value = read_nudge_step(config)
+        self.nudge_entry.delete(0, "end")
+        self.nudge_entry.insert(0, f"{value:g}")
+        accent = self.color("accent")
+        for preset, btn in self._preset_buttons.items():
+            if preset == value:
+                btn.configure(fg_color=accent, text_color="#1a1a1a")
+            else:
+                btn.configure(fg_color="transparent",
+                              text_color=self.color("text"))
+
+    def _on_preset_selected(self, preset: float):
+        """Preset über bestehenden Save-Pfad schreiben (Auto-Save)."""
+        self._set_value(NUDGE_STEP_KEY, preset)
+        self.nudge_status_label.configure(text="")
+        self._refresh_nudge_ui()
+
+    def _save_nudge_step(self):
+        """Schrittweite validieren + speichern (Enter/FocusOut, kein Button).
+
+        Ungültig -> Feld auf gespeicherten Wert zurücksetzen, Hinweis
+        zeigen; kein Crash, kein Bad-Value, keine Caption-Berührung.
+        """
+        parsed = parse_nudge_step(self.nudge_entry.get())
+        if parsed is None:
+            self.nudge_entry.delete(0, "end")
+            self.nudge_entry.insert(0, f"{read_nudge_step():g}")
+            self.nudge_status_label.configure(
+                text=i18n.t("set.nudge_invalid"))
+            return
+        self._set_value(NUDGE_STEP_KEY, parsed)
+        self.nudge_status_label.configure(text="")
+        self._refresh_nudge_ui()
+
+    def _save_snap_tolerance(self):
+        """Toleranz validieren + speichern (Enter/FocusOut, kein Button).
+
+        Ungültig -> Feld auf gespeicherten Wert zurücksetzen, Hinweis
+        zeigen; kein Crash, kein Bad-Value, keine Caption-Berührung.
+        """
+        parsed = parse_nudge_step(self.snap_entry.get())
+        if parsed is None:
+            self.snap_entry.delete(0, "end")
+            self.snap_entry.insert(0, f"{read_snap_tolerance():g}")
+            self.snap_status_label.configure(
+                text=i18n.t("set.snap_invalid"))
+            return
+        self._set_value(SNAP_TOLERANCE_KEY, parsed)
+        self.snap_status_label.configure(text="")
+        self._refresh_snap_ui()
+
+    def _refresh_snap_ui(self, config: dict | None = None):
+        """Entry + Preset-Markierung aus effektivem Wert (Block 42).
+
+        Exakter Preset-Treffer -> Accent-Füllung; freier Wert (z.B.
+        6 px) -> kein Preset aktiv, Entry zeigt den freien Wert.
+        """
+        value = read_snap_tolerance(config)
+        self.snap_entry.delete(0, "end")
+        self.snap_entry.insert(0, f"{value:g}")
+        accent = self.color("accent")
+        for preset, btn in self._preset_buttons_snap.items():
+            if preset == value:
+                btn.configure(fg_color=accent, text_color="#1a1a1a")
+            else:
+                btn.configure(fg_color="transparent",
+                              text_color=self.color("text"))
+
+    def _on_preset_selected_snap(self, preset: float):
+        """Preset ber bestehenden Save-Pfad schreiben (Auto-Save)."""
+        self._set_value(SNAP_TOLERANCE_KEY, preset)
+        self.snap_status_label.configure(text="")
+        self._refresh_snap_ui()
+
+
     def save_settings(self):
         """Speichert alle sichtbaren Einstellungen merge-sicher.
 
@@ -344,6 +616,12 @@ class SettingsScreen(Screen):
         config["language"] = language if language else config.get("language", "de")
         model = self.model_var.get()
         config["model"] = model if model in MODEL_OPTIONS else "small"
+        parsed = parse_nudge_step(self.nudge_entry.get())
+        config[NUDGE_STEP_KEY] = parsed if parsed is not None \
+            else read_nudge_step(config)
+        snap_parsed = parse_nudge_step(self.snap_entry.get())
+        config[SNAP_TOLERANCE_KEY] = snap_parsed if snap_parsed is not None \
+            else read_snap_tolerance(config)
         _write_config(config)
 
     def _clear_history(self):
