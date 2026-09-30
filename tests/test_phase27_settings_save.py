@@ -243,6 +243,297 @@ class TestCentralizedConfigReaders(Phase27Base):
         self.assertEqual(np_mod._load_default_model(), "small")
 
 
+class TestNudgeStepSettings(Phase27Base):
+    """Block 34: Nudge-Schrittweite (Parse, Read, UI, Persistenz)."""
+
+    def test_default(self):
+        from ui.screens.settings import NUDGE_STEP_DEFAULT, read_nudge_step
+        self.assertEqual(NUDGE_STEP_DEFAULT, 0.05)
+        self.assertEqual(read_nudge_step({}), 0.05)
+        self.assertEqual(read_nudge_step(), 0.05)
+
+    def test_parse_valid(self):
+        from ui.screens.settings import parse_nudge_step
+        self.assertEqual(parse_nudge_step("0.05"), 0.05)
+        self.assertEqual(parse_nudge_step("0,05"), 0.05)
+        self.assertEqual(parse_nudge_step("  0.1  "), 0.1)
+        self.assertEqual(parse_nudge_step(0.2), 0.2)
+        self.assertEqual(parse_nudge_step("0.001"), 0.001)
+
+    def test_parse_invalid(self):
+        from ui.screens.settings import parse_nudge_step
+        for bad in ("", "0", "0.0", "-0.05", "abc", "1..2",
+                    "nan", "NaN", "inf", "-inf", None, [], {}):
+            self.assertIsNone(parse_nudge_step(bad), msg=repr(bad))
+
+    def test_read_fallback(self):
+        from ui.screens.settings import read_nudge_step
+        self.assertEqual(read_nudge_step({"nudge_step": "kaputt"}), 0.05)
+        self.assertEqual(read_nudge_step({"nudge_step": -1}), 0.05)
+        self.assertEqual(read_nudge_step({"nudge_step": 0}), 0.05)
+        self.assertEqual(read_nudge_step({"nudge_step": "inf"}), 0.05)
+        self.assertEqual(read_nudge_step({"nudge_step": 0.25}), 0.25)
+
+    def test_ui_valid_applies_and_persists(self):
+        from ui.screens.settings import NUDGE_STEP_KEY, read_nudge_step
+        _, screen = self._settings_screen()
+        screen.nudge_entry.delete(0, "end")
+        screen.nudge_entry.insert(0, "0,10")
+        screen._save_nudge_step()
+        self.assertEqual(load_config()[NUDGE_STEP_KEY], 0.10)
+        self.assertEqual(read_nudge_step(), 0.10)
+        self.assertEqual(screen.nudge_status_label.cget("text"), "")
+        # Neuaufbau liest denselben Wert (Persistenz):
+        _, screen2 = self._settings_screen()
+        self.assertEqual(screen2.nudge_entry.get(), "0.1")
+
+    def test_ui_invalid_reverts(self):
+        from ui.screens.settings import NUDGE_STEP_KEY, read_nudge_step
+        _, screen = self._settings_screen()
+        set_config_value(NUDGE_STEP_KEY, 0.05)
+        for bad in ("", "0", "-2", "abc", "nan"):
+            screen.nudge_entry.delete(0, "end")
+            screen.nudge_entry.insert(0, bad)
+            screen._save_nudge_step()
+            self.assertEqual(load_config()[NUDGE_STEP_KEY], 0.05)
+            self.assertEqual(screen.nudge_entry.get(), "0.05")
+            self.assertTrue(screen.nudge_status_label.cget("text"))
+        self.assertEqual(read_nudge_step(), 0.05)
+
+    def test_save_settings_includes_nudge(self):
+        from ui.screens.settings import NUDGE_STEP_KEY
+        _, screen = self._settings_screen()
+        screen.nudge_entry.delete(0, "end")
+        screen.nudge_entry.insert(0, "0.2")
+        screen.save_settings()
+        self.assertEqual(load_config()[NUDGE_STEP_KEY], 0.2)
+
+    def test_de_en_labels(self):
+        for lang, title, desc in (
+                ("de", "Timing-Schrittweite", "Schrittweite"),
+                ("en", "Timing step", "Step size")):
+            i18n.set_language(lang)
+            self.assertEqual(i18n.t("set.nudge_title"), title)
+            self.assertIn(desc, i18n.t("set.nudge_desc"))
+            self.assertTrue(i18n.t("set.nudge_invalid"))
+
+
+class TestNudgePresets(Phase27Base):
+    """Block 35: Preset-Auswahl steuert nur den Settings-Wert."""
+
+    def test_preset_list(self):
+        from ui.screens.settings import NUDGE_STEP_PRESETS
+        self.assertEqual(tuple(NUDGE_STEP_PRESETS), (0.01, 0.05, 0.10, 0.50))
+
+    def test_each_preset_saves_value(self):
+        from ui.screens.settings import NUDGE_STEP_KEY, read_nudge_step
+        for preset in (0.01, 0.05, 0.10, 0.50):
+            _, screen = self._settings_screen()
+            screen._on_preset_selected(preset)
+            self.assertEqual(load_config()[NUDGE_STEP_KEY], preset)
+            self.assertEqual(read_nudge_step(), preset)
+            self.assertEqual(screen.nudge_entry.get(), f"{preset:g}")
+
+    def test_preset_uses_save_path(self):
+        """Preset-Klick schreibt merge-sicher (andere Keys bleiben)."""
+        from ui.screens.settings import NUDGE_STEP_KEY
+        set_config_value("theme", "light")
+        _, screen = self._settings_screen()
+        screen._on_preset_selected(0.10)
+        cfg = load_config()
+        self.assertEqual(cfg[NUDGE_STEP_KEY], 0.10)
+        self.assertEqual(cfg["theme"], "light")
+
+    def test_restart_loads_preset(self):
+        from ui.screens.settings import read_nudge_step
+        _, screen = self._settings_screen()
+        screen._on_preset_selected(0.50)
+        _, screen2 = self._settings_screen()
+        self.assertEqual(read_nudge_step(), 0.50)
+        self.assertEqual(screen2.nudge_entry.get(), "0.5")
+        active = [p for p, b in screen2._preset_buttons.items()
+                  if b.cget("fg_color") != "transparent"]
+        self.assertEqual(active, [0.50])
+
+    def test_free_value_marks_no_preset(self):
+        from ui.screens import settings as settings_mod
+        _, screen = self._settings_screen()
+        screen.nudge_entry.delete(0, "end")
+        screen.nudge_entry.insert(0, "0,15")
+        screen._save_nudge_step()
+        self.assertEqual(load_config()["nudge_step"], 0.15)
+        active = [p for p, b in screen._preset_buttons.items()
+                  if b.cget("fg_color") != "transparent"]
+        self.assertEqual(active, [])
+        # ... und bleibt nach Neustart ohne Markierung:
+        _, screen2 = self._settings_screen()
+        active2 = [p for p, b in screen2._preset_buttons.items()
+                   if b.cget("fg_color") != "transparent"]
+        self.assertEqual(active2, [])
+        self.assertEqual(settings_mod.read_nudge_step(), 0.15)
+
+    def test_preset_format_de_en(self):
+        from ui.screens.settings import format_nudge_preset
+        i18n.set_language("de")
+        self.assertEqual(
+            [format_nudge_preset(p) for p in (0.01, 0.05, 0.10, 0.50)],
+            ["0,01 s", "0,05 s", "0,10 s", "0,50 s"])
+        i18n.set_language("en")
+        self.assertEqual(
+            [format_nudge_preset(p) for p in (0.01, 0.05, 0.10, 0.50)],
+            ["0.01 s", "0.05 s", "0.10 s", "0.50 s"])
+
+    def test_single_source_no_second_step(self):
+        """Editor liest Settings (kein direktes PRESETS-Reading)."""
+        import ui.screens.caption_style as cs_mod
+        from ui.screens import settings as settings_mod
+        set_config_value(settings_mod.NUDGE_STEP_KEY, 0.10)
+        self.assertEqual(cs_mod.get_nudge_step(), 0.10)
+        self.assertEqual(settings_mod.read_nudge_step(), 0.10)
+        with open(cs_mod.__file__, encoding="utf-8") as handle:
+            source = handle.read()
+        self.assertNotIn("NUDGE_STEP_PRESETS", source)
+        self.assertNotIn("_NUDGE_STEP =", source)
+
+
+class TestSnapToleranceSettings(Phase27Base):
+    """Block 41: Snap-Toleranz (Default, Parse, Read, UI, Persistenz)."""
+
+    def test_default(self):
+        from ui.screens.settings import SNAP_TOLERANCE_DEFAULT, read_snap_tolerance
+        self.assertEqual(SNAP_TOLERANCE_DEFAULT, 8.0)
+        self.assertEqual(read_snap_tolerance({}), 8.0)
+        self.assertEqual(read_snap_tolerance(), 8.0)
+
+    def test_read_valid(self):
+        from ui.screens.settings import read_snap_tolerance
+        self.assertEqual(read_snap_tolerance({"snap_tolerance_px": 2}), 2.0)
+        self.assertEqual(read_snap_tolerance({"snap_tolerance_px": 16.5}), 16.5)
+        self.assertEqual(read_snap_tolerance({"snap_tolerance_px": "12"}), 12.0)
+
+    def test_read_invalid_falls_back(self):
+        from ui.screens.settings import read_snap_tolerance
+        for bad in ("", "0", 0, -3, "abc", "nan", "inf", None, [], {},
+                    "1..2"):
+            self.assertEqual(read_snap_tolerance(
+                {"snap_tolerance_px": bad}), 8.0, msg=repr(bad))
+
+    def test_ui_valid_applies_and_persists(self):
+        from ui.screens.settings import SNAP_TOLERANCE_KEY, read_snap_tolerance
+        _, screen = self._settings_screen()
+        screen.snap_entry.delete(0, "end")
+        screen.snap_entry.insert(0, "16")
+        screen._save_snap_tolerance()
+        self.assertEqual(load_config()[SNAP_TOLERANCE_KEY], 16.0)
+        self.assertEqual(read_snap_tolerance(), 16.0)
+        self.assertEqual(screen.snap_status_label.cget("text"), "")
+        # Neuaufbau liest denselben Wert (Persistenz):
+        _, screen2 = self._settings_screen()
+        self.assertEqual(screen2.snap_entry.get(), "16")
+
+    def test_ui_invalid_reverts(self):
+        from ui.screens.settings import SNAP_TOLERANCE_KEY, read_snap_tolerance
+        _, screen = self._settings_screen()
+        set_config_value(SNAP_TOLERANCE_KEY, 8.0)
+        for bad in ("", "0", "-2", "abc", "nan", "inf"):
+            screen.snap_entry.delete(0, "end")
+            screen.snap_entry.insert(0, bad)
+            screen._save_snap_tolerance()
+            self.assertEqual(load_config()[SNAP_TOLERANCE_KEY], 8.0)
+            self.assertEqual(screen.snap_entry.get(), "8")
+            self.assertTrue(screen.snap_status_label.cget("text"))
+        self.assertEqual(read_snap_tolerance(), 8.0)
+
+    def test_ui_comma_and_whitespace(self):
+        from ui.screens.settings import read_snap_tolerance
+        _, screen = self._settings_screen()
+        screen.snap_entry.delete(0, "end")
+        screen.snap_entry.insert(0, "  2,5  ")
+        screen._save_snap_tolerance()
+        self.assertEqual(read_snap_tolerance(), 2.5)
+
+    def test_de_en_labels(self):
+        for lang, title in (("de", "Snap-Toleranz"), ("en", "Snap tolerance")):
+            controller, _screen = self._settings_screen()
+            controller.set_language(lang)
+            screen = controller.get_screen("settings")
+            found = " ".join(
+                w.cget("text") for w in screen.snap_entry.master.winfo_children()
+                if "Label" in type(w).__name__)
+            self.assertIn(title, found)
+
+
+class TestSnapPresetSettings(Phase27Base):
+    """Block 42: Snap-Presets (Konstante, Auswahl, Persistenz, freie Werte)."""
+
+    def test_preset_constant(self):
+        from ui.screens.settings import SNAP_TOLERANCE_PRESETS
+        self.assertEqual(SNAP_TOLERANCE_PRESETS, (2.0, 4.0, 8.0, 16.0))
+
+    def test_no_duplicate_in_caption_style(self):
+        import ui.screens.caption_style as cs_mod
+        src = open(cs_mod.__file__, encoding="utf-8").read()
+        self.assertNotIn("SNAP_TOLERANCE_PRESETS", src)
+        self.assertNotIn("(2.0, 4.0, 8.0, 16.0)", src)
+
+    def test_preset_format(self):
+        from ui.screens.settings import format_snap_preset
+        self.assertEqual(format_snap_preset(2.0), "2 px")
+        self.assertEqual(format_snap_preset(4.0), "4 px")
+        self.assertEqual(format_snap_preset(8.0), "8 px")
+        self.assertEqual(format_snap_preset(16.0), "16 px")
+
+    def test_preset_click_writes_config(self):
+        from ui.screens.settings import SNAP_TOLERANCE_KEY, read_snap_tolerance
+        _, screen = self._settings_screen()
+        for preset in (2.0, 4.0, 8.0, 16.0):
+            screen._on_preset_selected_snap(preset)
+            self.assertEqual(load_config()[SNAP_TOLERANCE_KEY], preset)
+            self.assertEqual(read_snap_tolerance(), preset)
+
+    def test_preset_active_marking(self):
+        _, screen = self._settings_screen()
+        accent = screen.color("accent")
+        screen._on_preset_selected_snap(16.0)
+        active = [p for p, b in screen._preset_buttons_snap.items()
+                  if str(b.cget("fg_color")) == str(accent)]
+        self.assertEqual(active, [16.0])
+        screen._on_preset_selected_snap(4.0)
+        active = [p for p, b in screen._preset_buttons_snap.items()
+                  if str(b.cget("fg_color")) == str(accent)]
+        self.assertEqual(active, [4.0])
+
+    def test_preset_persist_reload(self):
+        from ui.screens.settings import SNAP_TOLERANCE_KEY, read_snap_tolerance
+        _, screen = self._settings_screen()
+        screen._on_preset_selected_snap(16.0)
+        self.assertEqual(load_config()[SNAP_TOLERANCE_KEY], 16.0)
+        _, screen2 = self._settings_screen()
+        accent = screen2.color("accent")
+        self.assertEqual(read_snap_tolerance(), 16.0)
+        active = [p for p, b in screen2._preset_buttons_snap.items()
+                  if str(b.cget("fg_color")) == str(accent)]
+        self.assertEqual(active, [16.0])
+
+    def test_free_value_no_preset(self):
+        from ui.screens.settings import read_snap_tolerance
+        _, screen = self._settings_screen()
+        accent = screen.color("accent")
+        for free in ("6", "12.5"):
+            screen.snap_entry.delete(0, "end")
+            screen.snap_entry.insert(0, free)
+            screen._save_snap_tolerance()
+            self.assertEqual(read_snap_tolerance(), float(free))
+            active = [p for p, b in screen._preset_buttons_snap.items()
+                      if str(b.cget("fg_color")) == str(accent)]
+            self.assertEqual(active, [])
+        # danach Preset -> korrekt markiert:
+        screen._on_preset_selected_snap(8.0)
+        active = [p for p, b in screen._preset_buttons_snap.items()
+                  if str(b.cget("fg_color")) == str(accent)]
+        self.assertEqual(active, [8.0])
+
+
 if __name__ == "__main__":
     unittest.main()
 

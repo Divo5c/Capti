@@ -20,6 +20,7 @@ from ui.app_controller import AppController
 from ui import i18n
 from ui.screens.new_project import (
     NewProjectScreen, LANGUAGE_KEYS, MODEL_OPTIONS, _load_default_model,
+    resolve_language_code,
 )
 
 
@@ -103,6 +104,50 @@ class TestNewProjectScreen(unittest.TestCase):
         self.controller.show_screen("new_project")
         self.screen.navigate("home")
         self.assertEqual(self.controller.current_screen, "home")
+
+    def test_lang_dropdown_shows_no_raw_keys(self):
+        """C1: Dropdown zeigt übersetzte Labels, keine rohen i18n-Keys."""
+        values = list(self.screen.lang_combo.cget("values"))
+        self.assertTrue(values)
+        for v in values:
+            self.assertNotIn("np.lang", v,
+                             f"Roher Key im Dropdown sichtbar: {v!r}")
+        self.assertIn(i18n.t("np.lang.auto"), values)
+        self.assertIn(i18n.t("np.lang.de"), values)
+        self.assertIn(i18n.t("np.lang.en"), values)
+
+    def test_lang_selection_stores_code(self):
+        """C1: Auswahl speichert stabilen Code; Anzeige bleibt Label."""
+        self.controller.show_screen("new_project")
+        self.screen.set_video("C:/videos/clip.mp4")
+        self.screen.lang_var.set(i18n.t("np.lang.de"))
+        self.screen._on_continue()
+        self.assertEqual(self.controller.pending_project["language"], "de")
+        # Anzeige bleibt das sichtbare Label, kein Code
+        self.assertEqual(self.screen.lang_var.get(), i18n.t("np.lang.de"))
+
+    def test_lang_selection_english_and_auto(self):
+        """C1: English -> 'en', Auto -> None (Auto-Erkennung)."""
+        self.controller.show_screen("new_project")
+        self.screen.set_video("C:/videos/clip.mp4")
+        self.screen.lang_var.set(i18n.t("np.lang.en"))
+        self.screen._on_continue()
+        self.assertEqual(self.controller.pending_project["language"], "en")
+        self.controller.show_screen("new_project")
+        self.screen.set_video("C:/videos/clip.mp4")
+        self.screen.lang_var.set(i18n.t("np.lang.auto"))
+        self.screen._on_continue()
+        self.assertIsNone(self.controller.pending_project["language"])
+
+    def test_resolve_language_code_units(self):
+        """C1: Resolver – Keys, Labels aller Sprachen, Unbekannt."""
+        self.assertIsNone(resolve_language_code("np.lang.auto"))
+        self.assertEqual(resolve_language_code("np.lang.de"), "de")
+        self.assertEqual(resolve_language_code("Deutsch"), "de")
+        self.assertEqual(resolve_language_code("German"), "de")
+        self.assertEqual(resolve_language_code("English"), "en")
+        self.assertIsNone(resolve_language_code("???"))
+        self.assertIsNone(resolve_language_code(""))
 
 
 if __name__ == "__main__":

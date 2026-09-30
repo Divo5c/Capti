@@ -7,6 +7,7 @@ Status-Keys ("pipeline.*"); die UI übersetzt sie.
 
 import os
 import sys
+import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -19,8 +20,8 @@ if "CAPTI_CONFIG_FILE" not in os.environ:
 
 import pipeline as pipeline_mod
 from pipeline import (
-    CaptiPipeline, STATUS_STARTED, STATUS_EXTRACT_AUDIO, STATUS_TRANSCRIBE,
-    STATUS_EMBED_SUBTITLES, STATUS_COMPLETED,
+    CaptiPipeline, STATUS_STARTED, STATUS_DOWNLOAD_MODEL, STATUS_EXTRACT_AUDIO,
+    STATUS_TRANSCRIBE, STATUS_EMBED_SUBTITLES, STATUS_COMPLETED,
 )
 from ui import i18n
 
@@ -30,21 +31,28 @@ class TestPipelineStatusKeys(unittest.TestCase):
 
     def _run_pipeline(self):
         statuses = []
-        p = CaptiPipeline(
-            temp_dir=os.path.join(os.environ.get("TEMP", "."), "capti_test"),
-            on_status=statuses.append,
-        )
-        # Alle externen Abhängigkeiten mocken – nur der Status-Fluss zählt
-        with patch.object(pipeline_mod, "create_subtitle_engine", return_value=MagicMock()), \
-             patch.object(pipeline_mod, "create_video_processor") as mock_vp, \
-             patch.object(pipeline_mod, "group_caption_segments", return_value=[]):
-            vp = mock_vp.return_value
-            vp.extract_audio.return_value = "audio.wav"
-            vp.get_video_info.return_value = {"streams": [{"width": 1080, "height": 1920}]}
-            try:
-                p._run("C:/videos/clip.mp4", "tiny", None)
-            except Exception:
-                pass  # Mock-Kette kann spät fehlschlagen – Status sind bereits geflogen
+        # Hermetisch: Pipeline-Artefakte gehören in ein echtes Temp-Verzeichnis,
+        # niemals ins Repo (auf Systemen ohne TEMP würde "." greifen).
+        with tempfile.TemporaryDirectory(prefix="capti_pipeline_status_") as td:
+            p = CaptiPipeline(
+                temp_dir=td,
+                on_status=statuses.append,
+            )
+            # Alle externen Abhängigkeiten mocken – nur der Status-Fluss zählt.
+            # Cache-Check deterministisch auf "nicht gecacht" (sonst hinge die
+            # Sequenz vom lokalen HF-Cache ab).
+            with patch.object(pipeline_mod, "create_subtitle_engine", return_value=MagicMock()), \
+                 patch.object(pipeline_mod.SubtitleEngine, "is_model_cached",
+                              return_value=False), \
+                 patch.object(pipeline_mod, "create_video_processor") as mock_vp, \
+                 patch.object(pipeline_mod, "group_caption_segments", return_value=[]):
+                vp = mock_vp.return_value
+                vp.extract_audio.return_value = "audio.wav"
+                vp.get_video_info.return_value = {"streams": [{"width": 1080, "height": 1920}]}
+                try:
+                    p._run("C:/videos/clip.mp4", "tiny", None)
+                except Exception:
+                    pass  # Mock-Kette kann spät fehlschlagen – Status sind bereits geflogen
         return statuses
 
     def test_no_german_status_texts(self):
@@ -57,9 +65,10 @@ class TestPipelineStatusKeys(unittest.TestCase):
             self.assertNotIn("Bette Untertitel", s)
 
     def test_expected_key_sequence(self):
+        # C6: Modell-Bereitstellung ist fester Sequenz-Bestandteil.
         statuses = self._run_pipeline()
-        expected_prefixes = [STATUS_STARTED, STATUS_EXTRACT_AUDIO,
-                             STATUS_TRANSCRIBE]
+        expected_prefixes = [STATUS_STARTED, STATUS_DOWNLOAD_MODEL,
+                             STATUS_EXTRACT_AUDIO, STATUS_TRANSCRIBE]
         for i, prefix in enumerate(expected_prefixes):
             self.assertEqual(statuses[i], prefix)
 
@@ -67,8 +76,8 @@ class TestPipelineStatusKeys(unittest.TestCase):
 class TestI18nPipelineKeys(unittest.TestCase):
     """3+4+5: Beide Sprachen besitzen alle Pipeline-Keys mit korrekten Texten."""
 
-    KEYS = [STATUS_STARTED, STATUS_EXTRACT_AUDIO, STATUS_TRANSCRIBE,
-            STATUS_EMBED_SUBTITLES, STATUS_COMPLETED]
+    KEYS = [STATUS_STARTED, STATUS_DOWNLOAD_MODEL, STATUS_EXTRACT_AUDIO,
+            STATUS_TRANSCRIBE, STATUS_EMBED_SUBTITLES, STATUS_COMPLETED]
 
     def test_all_keys_in_both_languages(self):
         de = set(i18n.TRANSLATIONS["de"])
@@ -80,6 +89,8 @@ class TestI18nPipelineKeys(unittest.TestCase):
     def test_german_texts_preserve_meaning(self):
         i18n.set_language("de")
         self.assertEqual(i18n.t(STATUS_STARTED), "Verarbeitung gestartet...")
+        self.assertEqual(i18n.t(STATUS_DOWNLOAD_MODEL),
+                         "Whisper-Modell wird geladen...")
         self.assertEqual(i18n.t(STATUS_EXTRACT_AUDIO), "Extrahiere Audio...")
         self.assertEqual(i18n.t(STATUS_TRANSCRIBE), "Transkribiere Audio...")
         self.assertEqual(i18n.t(STATUS_EMBED_SUBTITLES), "Bette Untertitel ein...")
@@ -89,6 +100,8 @@ class TestI18nPipelineKeys(unittest.TestCase):
     def test_english_texts(self):
         i18n.set_language("en")
         self.assertEqual(i18n.t(STATUS_STARTED), "Processing started...")
+        self.assertEqual(i18n.t(STATUS_DOWNLOAD_MODEL),
+                         "Loading Whisper model...")
         self.assertEqual(i18n.t(STATUS_EXTRACT_AUDIO), "Extracting audio...")
         self.assertEqual(i18n.t(STATUS_TRANSCRIBE), "Transcribing audio...")
         self.assertEqual(i18n.t(STATUS_EMBED_SUBTITLES), "Embedding subtitles...")

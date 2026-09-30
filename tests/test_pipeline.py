@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from pipeline import CaptiPipeline
+from pipeline import CaptiPipeline, create_pipeline
 
 
 def make_segments():
@@ -126,6 +126,20 @@ class TestCaptiPipeline(unittest.TestCase):
         p._progress(150)
         p._progress(-5)
         self.assertEqual(captured, [100, 0])
+
+    def test_create_pipeline_factory_contract(self):
+        """Block 12 (B): create_pipeline verdrahtet Callbacks korrekt."""
+        seen = []
+        pipe = create_pipeline(
+            self.tmp.name,
+            on_status=seen.append,
+            on_done=lambda p: seen.append(("done", p)),
+        )
+        self.assertIsInstance(pipe, CaptiPipeline)
+        self.assertEqual(str(pipe.temp_dir), self.tmp.name)
+        pipe._on_status("pipeline.started")
+        pipe._on_done("out.mp4")
+        self.assertEqual(seen, ["pipeline.started", ("done", "out.mp4")])
 
 
 if __name__ == "__main__":

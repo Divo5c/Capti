@@ -105,6 +105,9 @@ class TestPopAnimation(Phase32Base):
     def test_pop_disabled_no_scale(self):  # Pop aus -> immer 100 %
         _, screen = self._screen()
         screen.style["pop_enabled"] = False
+        # Wie im echten UI-Flow (_on_pop_change -> _apply_preview) neu aufbauen,
+        # damit der Render-Snapshot den geänderten Style enthält (Block 18).
+        screen._rebuild_preview_layout()
         for t in (350, 500, 600, 900):
             active, scale = screen._current_pop_state(t)
             self.assertEqual(scale, 100.0, f"t={t}")
@@ -121,6 +124,7 @@ class TestPopAnimation(Phase32Base):
     def test_pop_scale_100_means_no_scaling(self):
         _, screen = self._screen()
         screen.style["pop_scale"] = 100
+        screen._rebuild_preview_layout()
         slot = self._timeline(screen)[0]
         _, scale = screen._current_pop_state(slot["start"] + 200)
         self.assertEqual(scale, 100.0)
@@ -130,8 +134,10 @@ class TestPopAnimation(Phase32Base):
         slot = self._timeline(screen)[0]
         t = slot["end"] - 10   # kurz vor Wortende: nahe Maximalwert
         screen.style["pop_scale"] = 110
+        screen._rebuild_preview_layout()
         _, small = screen._current_pop_state(t)
         screen.style["pop_scale"] = 150
+        screen._rebuild_preview_layout()
         _, big = screen._current_pop_state(t)
         self.assertGreater(big, small)
 

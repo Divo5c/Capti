@@ -13,7 +13,12 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from caption_renderer import CaptionRenderer, create_caption_renderer, group_caption_segments
+from caption_renderer import (
+    CaptionRenderer,
+    create_caption_renderer,
+    escape_ass_text,
+    group_caption_segments,
+)
 from subtitle_engine import SubtitleEngine
 
 
@@ -390,6 +395,254 @@ class TestSrtStillWorks(unittest.TestCase):
         nl = chr(10)
         self.assertIn(nl.join(["1", "00:00:00,000 --> 00:00:02,000", "Hallo wie geht es dir"]), content)
         self.assertIn(nl.join(["2", "00:00:02,500 --> 00:00:03,500", "Zweites Segment"]), content)
+
+
+class TestAssTextEscaping(unittest.TestCase):
+    """Block 11: Transkript-Sonderzeichen vs. Renderer-Override-Tags."""
+
+    def setUp(self):
+        self.renderer = create_caption_renderer()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.ass_path = os.path.join(self.tmp.name, "test.ass")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _karaoke(self, text, words=None):
+        seg = {"start": 0.0, "end": 2.0, "text": text,
+               "words": words if words is not None else []}
+        return self.renderer._build_karaoke_text(seg)
+
+    def test_normal_text_unchanged(self):
+        self.assertEqual(escape_ass_text("Hallo Welt"), "Hallo Welt")
+        self.assertEqual(self._karaoke("Hallo Welt"), "Hallo Welt")
+
+    def test_brace_escaped_as_literal(self):
+        out = self._karaoke("Hallo {Welt}")
+        self.assertIn("Hallo \\{Welt\\}", out)
+        self.assertNotIn("{Welt}", out.replace("\\{Welt\\}", ""))
+
+    def test_backslash_escaped(self):
+        out = self._karaoke("C:\\Pfad\\Datei")
+        self.assertIn("C:\\\\Pfad\\\\Datei", out)
+
+    def test_combination_all_three(self):
+        out = self._karaoke("A{B}\\C")
+        self.assertIn("A\\{B\\}\\\\C", out)
+
+    def test_karaoke_tags_stay_valid(self):
+        seg = {"start": 0.0, "end": 2.0, "text": "Hi {x}\\y",
+               "words": [{"word": "Hi", "start": 0.0, "end": 1.0, "probability": 1.0},
+                         {"word": "{x}\\y", "start": 1.0, "end": 2.0, "probability": 1.0}]}
+        text = self.renderer._build_karaoke_text(seg)
+        # Renderer-Tags roh und valide ...
+        self.assertIn(r"{\k", text)
+        self.assertIn(r"\t(", text)
+        self.assertIn(r"\fscx", text)
+        # ... Usertext escapet und sichtbar
+        self.assertIn("\\{x\\}\\\\y", text)
+
+    def test_unicode_umlauts_unchanged(self):
+        self.assertEqual(escape_ass_text("Grüße äöü ß €"), "Grüße äöü ß €")
+        self.assertIn("Grüße", self._karaoke("Grüße äöü"))
+
+    def test_empty_and_none_safe(self):
+        self.assertEqual(escape_ass_text(""), "")
+        self.assertEqual(escape_ass_text(None), "")
+
+    def test_no_bom_in_generated_ass(self):
+        """Block 11: ASS ohne UTF-8-BOM."""
+        import codecs
+        self.renderer.generate_ass(make_segments(), self.ass_path)
+        with open(self.ass_path, "rb") as f:
+            head = f.read(3)
+        self.assertNotEqual(head, codecs.BOM_UTF8)
+        with open(self.ass_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("[Script Info]", content)
+        self.assertIn("Dialogue:", content)
+
+
+ADAPTER_FIXTURE_DIALOGUES = {
+    "A": [
+        'Dialogue: 0,0:00:00.50,0:00:02.50,Caption,,0,0,0,,{\\k100}{\\t(0,1000,\\fscx112\\fscy112)\\t(1000,1150,\\fscx100\\fscy100)}Capti {\\k100}{\\t(1000,2000,\\fscx112\\fscy112)\\t(2000,2150,\\fscx100\\fscy100)}Test',
+    ],
+    "B": [
+        'Dialogue: 0,0:00:00.00,0:00:02.00,Caption,,0,0,0,,{\\k60}{\\t(0,500,\\fscx112\\fscy112)\\t(500,650,\\fscx100\\fscy100)}Hallo {\\k30}{\\t(600,800,\\fscx112\\fscy112)\\t(800,950,\\fscx100\\fscy100)}wie {\\k40}{\\t(900,1200,\\fscx112\\fscy112)\\t(1200,1350,\\fscx100\\fscy100)}geht {\\k20}{\\t(1300,1400,\\fscx112\\fscy112)\\t(1400,1550,\\fscx100\\fscy100)}es\\N{\\k50}{\\t(1500,1900,\\fscx112\\fscy112)\\t(1900,2050,\\fscx100\\fscy100)}dir',
+    ],
+    "C": [
+        'Dialogue: 0,0:00:00.32,0:00:01.55,Caption,,0,0,0,,{\\k63}{\\t(0,590,\\fscx112\\fscy112)\\t(590,740,\\fscx100\\fscy100)}Echt {\\k60}{\\t(630,1230,\\fscx112\\fscy112)\\t(1230,1380,\\fscx100\\fscy100)}krumm',
+    ],
+    "D": [
+        'Dialogue: 0,0:00:00.00,0:00:05.00,Caption,,0,0,0,,{\\k100}{\\t(0,300,\\fscx112\\fscy112)\\t(300,450,\\fscx100\\fscy100)}A {\\k200}{\\t(1000,1200,\\fscx112\\fscy112)\\t(1200,1350,\\fscx100\\fscy100)}B {\\k200}{\\t(3000,4000,\\fscx112\\fscy112)\\t(4000,4150,\\fscx100\\fscy100)}C',
+    ],
+    "E": [
+        'Dialogue: 0,0:00:00.50,0:00:02.50,Caption,,0,0,0,,{\\k100}{\\t(0,1000,\\fscx125\\fscy125)\\t(1000,1120,\\fscx100\\fscy100)}Capti {\\k100}{\\t(1000,2000,\\fscx125\\fscy125)\\t(2000,2120,\\fscx100\\fscy100)}Test',
+    ],
+    "F": [
+        'Dialogue: 0,0:00:00.00,0:00:05.00,Caption,,0,0,0,,{\\k50}{\\t(0,400,\\fscx112\\fscy112)\\t(400,550,\\fscx100\\fscy100)}w0 {\\k50}{\\t(500,900,\\fscx112\\fscy112)\\t(900,1050,\\fscx100\\fscy100)}w1 {\\k50}{\\t(1000,1400,\\fscx112\\fscy112)\\t(1400,1550,\\fscx100\\fscy100)}w2 {\\k50}{\\t(1500,1900,\\fscx112\\fscy112)\\t(1900,2050,\\fscx100\\fscy100)}w3\\N{\\k50}{\\t(2000,2400,\\fscx112\\fscy112)\\t(2400,2550,\\fscx100\\fscy100)}w4 {\\k50}{\\t(2500,2900,\\fscx112\\fscy112)\\t(2900,3050,\\fscx100\\fscy100)}w5 {\\k50}{\\t(3000,3400,\\fscx112\\fscy112)\\t(3400,3550,\\fscx100\\fscy100)}w6 {\\k50}{\\t(3500,3900,\\fscx112\\fscy112)\\t(3900,4050,\\fscx100\\fscy100)}w7 {\\k100}{\\t(4000,4400,\\fscx112\\fscy112)\\t(4400,4550,\\fscx100\\fscy100)}w8',
+    ],
+    "G": [
+        'Dialogue: 0,0:00:00.00,0:00:02.00,Caption,,0,0,0,,{\\k60}{\\t(0,600,\\fscx112\\fscy112)\\t(600,750,\\fscx100\\fscy100)}Grüße {\\k60}{\\t(600,1200,\\fscx112\\fscy112)\\t(1200,1350,\\fscx100\\fscy100)}日本語 {\\k80}{\\t(1200,1900,\\fscx112\\fscy112)\\t(1900,2050,\\fscx100\\fscy100)}Welt!',
+    ],
+    "H": [
+        'Dialogue: 0,0:00:00.00,0:00:02.00,Caption,,0,0,0,,{\\k100}{\\t(0,1000,\\fscx112\\fscy112)\\t(1000,1150,\\fscx100\\fscy100)}A\\{B\\}\\\\C {\\k100}{\\t(1000,2000,\\fscx112\\fscy112)\\t(2000,2150,\\fscx100\\fscy100)}x',
+    ],
+    "I": [
+        'Dialogue: 0,0:00:00.00,0:00:01.00,Caption,,0,0,0,,{\\k100}{\\t(0,1000,\\fscx112\\fscy112)\\t(1000,1150,\\fscx100\\fscy100)}Eins',
+        'Dialogue: 0,0:00:02.00,0:00:03.00,Caption,,0,0,0,,{\\k40}{\\t(0,400,\\fscx112\\fscy112)\\t(400,550,\\fscx100\\fscy100)}Zwei {\\k60}{\\t(400,1000,\\fscx112\\fscy112)\\t(1000,1150,\\fscx100\\fscy100)}Stücke',
+        'Dialogue: 0,0:00:05.00,0:00:05.01,Caption,,0,0,0,,{\\k1}{\\t(0,10,\\fscx112\\fscy112)\\t(10,160,\\fscx100\\fscy100)}Kurz',
+    ],
+    "J_strong": [
+        'Dialogue: 0,0:00:00.50,0:00:02.50,Caption,,0,0,0,,{\\k100}{\\t(0,1000,\\fscx125\\fscy125)\\t(1000,1120,\\fscx100\\fscy100)}Capti {\\k100}{\\t(1000,2000,\\fscx125\\fscy125)\\t(2000,2120,\\fscx100\\fscy100)}Test',
+    ],
+    "J_clean": [
+        'Dialogue: 0,0:00:00.50,0:00:02.50,Caption,,0,0,0,,{\\k100}Capti {\\k100}Test',
+    ],
+    "K": [
+        'Dialogue: 0,0:00:00.50,0:00:02.50,Caption,,0,0,0,,{\\k100}Capti {\\k100}Test',
+    ],
+    "L": [
+        'Dialogue: 0,0:00:03.00,0:00:03.01,Caption,,0,0,0,,{\\k1}{\\t(0,1,\\fscx112\\fscy112)\\t(1,151,\\fscx100\\fscy100)}Null',
+        'Dialogue: 0,0:00:04.00,0:00:05.00,Caption,,0,0,0,,{\\k100}{\\t(0,1,\\fscx112\\fscy112)\\t(1,151,\\fscx100\\fscy100)}Solo',
+        'Dialogue: 0,0:00:06.00,0:00:07.00,Caption,,0,0,0,,Kein Wortstamm',
+    ],
+}
+
+ADAPTER_FIXTURE_STYLES = {
+    "A": 'Style: Caption,Arial Black,67,&H0000FFFF,&H00FFFFFF,&H00101010,&H80000000,1,0,0,0,100,100,0,0,1,4,1,2,40,40,384,1',
+    "J_strong": 'Style: Caption,Arial Black,57,&H0000FFFF,&H00FFFFFF,&H00101010,&H80000000,1,0,0,0,100,100,0,0,1,4,1,2,40,40,236,1',
+    "J_clean": 'Style: Caption,Arial Black,57,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,4,1,2,40,40,236,1',
+}
+
+
+class TestAssAdapterByteIdentity(unittest.TestCase):
+    """Block 17: NEU-Pfad (RenderCaption -> Adapter) ist byte-identisch zum
+    ALT-Pfad. Erwartungswerte wurden mit dem Code VOR dem Refactor erzeugt
+    und als Literale eingebettet (Source of Truth)."""
+
+    def _w(self, word, s, e, p=0.9):
+        return {"word": word, "start": s, "end": e, "probability": p}
+
+    def _s(self, start, end, text, words):
+        return {"start": start, "end": end, "text": text, "words": words}
+
+    def _strong_kwargs(self):
+        return {"normal_color": "&H00FFFFFF", "highlight_color": "&H0000FFFF",
+                "outline_color": "&H00101010", "shadow_color": "&H80000000",
+                "font_name": "Arial Black", "font_size": 68,
+                "pop_enabled": True, "pop_scale": 125, "pop_decay_ms": 120}
+
+    def _clean_kwargs(self):
+        return {"normal_color": "&H00FFFFFF", "highlight_color": "&H00FFFFFF",
+                "outline_color": "&H00000000", "shadow_color": "&H80000000",
+                "font_name": "Arial Black", "font_size": 68,
+                "pop_enabled": False, "pop_scale": 112, "pop_decay_ms": 150}
+
+    def _fixtures(self):
+        W, S = self._w, self._s
+        return {
+            "A": {"segments": [S(0.5, 2.5, "Capti Test",
+                                 [W("Capti", 0.5, 1.5), W("Test", 1.5, 2.5)])],
+                  "kwargs": {}, "dims": (1080, 1920)},
+            "B": {"segments": [S(0.0, 2.0, "Hallo wie geht es dir",
+                                 [W("Hallo", 0.0, 0.5), W("wie", 0.6, 0.8),
+                                  W("geht", 0.9, 1.2), W("es", 1.3, 1.4),
+                                  W("dir", 1.5, 1.9)])],
+                  "kwargs": {}, "dims": (1080, 1920)},
+            "C": {"segments": [S(0.32, 1.55, "Echt krumm",
+                                 [W("Echt", 0.32, 0.91), W("krumm", 0.95, 1.55)])],
+                  "kwargs": {}, "dims": (720, 1280)},
+            "D": {"segments": [S(0.0, 5.0, "A B C",
+                                 [W("A", 0.0, 0.3), W("B", 1.0, 1.2),
+                                  W("C", 3.0, 4.0)])],
+                  "kwargs": {}, "dims": (1080, 1920)},
+            "E": {"segments": [S(0.5, 2.5, "Capti Test",
+                                 [W("Capti", 0.5, 1.5), W("Test", 1.5, 2.5)])],
+                  "kwargs": self._strong_kwargs(), "dims": (1080, 1920)},
+            "F": {"segments": [S(0.0, 5.0, " ".join(f"w{i}" for i in range(9)),
+                                 [W(f"w{i}", float(i) * 0.5, float(i) * 0.5 + 0.4)
+                                  for i in range(9)])],
+                  "kwargs": {}, "dims": (1080, 1920)},
+            "G": {"segments": [S(0.0, 2.0, "Grüße 日本語 Welt",
+                                 [W("Grüße", 0.0, 0.6), W("日本語", 0.6, 1.2),
+                                  W("Welt!", 1.2, 1.9)])],
+                  "kwargs": {}, "dims": (1080, 1920)},
+            "H": {"segments": [S(0.0, 2.0, "A{B}\\C",
+                                 [W("A{B}\\C", 0.0, 1.0), W("x", 1.0, 2.0)])],
+                  "kwargs": {}, "dims": (1080, 1920)},
+            "I": {"segments": [
+                S(0.0, 1.0, "Eins", [W("Eins", 0.0, 1.0)]),
+                S(2.0, 3.0, "Zwei Stücke",
+                  [W("Zwei", 2.0, 2.4), W("Stücke", 2.4, 3.0)]),
+                S(5.0, 5.01, "Kurz", [W("Kurz", 5.0, 5.01)]),
+            ], "kwargs": {}, "dims": (1920, 1080)},
+            "J_strong": {"segments": [S(0.5, 2.5, "Capti Test",
+                                        [W("Capti", 0.5, 1.5), W("Test", 1.5, 2.5)])],
+                         "kwargs": self._strong_kwargs(), "dims": (1920, 1080)},
+            "J_clean": {"segments": [S(0.5, 2.5, "Capti Test",
+                                       [W("Capti", 0.5, 1.5), W("Test", 1.5, 2.5)])],
+                        "kwargs": self._clean_kwargs(), "dims": (1920, 1080)},
+            "K": {"segments": [S(0.5, 2.5, "Capti Test",
+                                 [W("Capti", 0.5, 1.5), W("Test", 1.5, 2.5)])],
+                  "kwargs": self._clean_kwargs(), "dims": (1080, 1920)},
+            "L": {"segments": [
+                S(3.0, 3.0, "Null", [W("Null", 3.0, 3.0)]),
+                {"start": 4.0, "end": 5.0, "text": "Solo",
+                 "words": [{"word": "Solo", "start": 4.0}]},
+                {"start": 6.0, "end": 7.0, "text": "Kein Wortstamm", "words": []},
+            ], "kwargs": {}, "dims": (1080, 1920)},
+        }
+
+    def _dialogues_of(self, name):
+        fx = self._fixtures()[name]
+        renderer = CaptionRenderer(**fx["kwargs"])
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = os.path.join(tmp.name, f"{name}.ass")
+        w, h = fx["dims"]
+        renderer.generate_ass(fx["segments"], path, video_width=w, video_height=h)
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+        return [l for l in content.splitlines() if l.startswith("Dialogue:")]
+
+    def test_adapter_byte_identity_all_fixtures(self):
+        for name, expected in ADAPTER_FIXTURE_DIALOGUES.items():
+            with self.subTest(fixture=name):
+                self.assertEqual(self._dialogues_of(name), expected)
+
+    def test_adapter_style_lines(self):
+        for name, expected in ADAPTER_FIXTURE_STYLES.items():
+            with self.subTest(fixture=name):
+                fx = self._fixtures()[name]
+                renderer = CaptionRenderer(**fx["kwargs"])
+                tmp = tempfile.TemporaryDirectory()
+                self.addCleanup(tmp.cleanup)
+                path = os.path.join(tmp.name, "s.ass")
+                w, h = fx["dims"]
+                renderer.generate_ass(fx["segments"], path,
+                                      video_width=w, video_height=h)
+                with open(path, "r", encoding="utf-8") as f:
+                    styles = [l for l in f.read().splitlines()
+                              if l.startswith("Style:")]
+                self.assertEqual(styles, [expected])
+
+    def test_ass_from_captions_standalone(self):
+        from caption_renderer import _captions_for_ass, ass_from_captions
+        fx = self._fixtures()["A"]
+        renderer = CaptionRenderer(**fx["kwargs"])
+        w, h = fx["dims"]
+        layout = renderer.compute_layout(w, h)
+        style = {k: getattr(renderer, k) for k in (
+            "normal_color", "highlight_color", "outline_color",
+            "shadow_color", "font_name", "font_size",
+            "pop_enabled", "pop_scale", "pop_decay_ms")}
+        captions = _captions_for_ass(fx["segments"], style, dict(layout))
+        texts = ass_from_captions(captions)
+        self.assertEqual(len(texts), 1)
+        full = self._dialogues_of("A")[0]
+        self.assertTrue(full.endswith(texts[0]))
+        self.assertIn("{\\k100}", texts[0])
 
 
 if __name__ == "__main__":

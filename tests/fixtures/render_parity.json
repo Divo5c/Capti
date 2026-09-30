@@ -1,0 +1,26 @@
+{
+  "_note": "Kanonische Renderer-Baseline (Fix-Block 15). Python-Referenz; Dart-Mirror: mobile/lib/captions/renderer.dart (computeLayout/currentPopState, formelgleich) getestet in mobile/test (rotation/preview). Keine Code-Dopplung hier – nur derselbe Vertrag.",
+  "layout_1080x1920": {
+    "format": "portrait", "play_res_x": 1080, "play_res_y": 1920,
+    "font_size": 67, "max_words_per_line": 4, "margin_v": 384,
+    "chars_per_line": 24
+  },
+  "layout_1920x1080": {
+    "format": "landscape", "play_res_x": 1920, "play_res_y": 1080,
+    "font_size": 57, "max_words_per_line": 5, "margin_v": 236,
+    "chars_per_line": 51
+  },
+  "pop": {
+    "slots": [{"start": 300.0, "end": 750.0, "decay_end": 900.0}],
+    "pop_scale": 112,
+    "cases": [
+      [0, null, 100.0], [299, null, 100.0], [300, 0, 100.0],
+      [525, 0, 109.6], [749, 0, 112.0], [750, 0, 112.0],
+      [800, 0, 108.0], [900, null, 100.0], [1000, null, 100.0]
+    ]
+  },
+  "karaoke": {
+    "words": ["Capti", "Test"],
+    "expected": "{\\k100}{\\t(0,1000,\\fscx112\\fscy112)\\t(1000,1150,\\fscx100\\fscy100)}Capti {\\k100}{\\t(1000,2000,\\fscx112\\fscy112)\\t(2000,2150,\\fscx100\\fscy100)}Test"
+  }
+}
