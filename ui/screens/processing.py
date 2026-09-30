@@ -220,6 +220,13 @@ class ProcessingScreen(Screen):
         self._nav_locked = False
         self.btn_back.configure(state="normal")
 
+    def show_cancelled(self, message: str = ""):
+        """Abbruch (B2): kein Fehlerdialog, nur Status + freie Navigation."""
+        self.error_label.configure(text="")
+        self.update_status(i18n.t("proc.cancelled"))
+        self._nav_locked = False
+        self.btn_back.configure(state="normal")
+
     def reset(self):
         """Setzt den Screen für eine neue Verarbeitung zurück."""
         self.update_progress(0)
@@ -291,6 +298,7 @@ class ProcessingScreen(Screen):
             on_log=lambda level, msg: self._ui_queue.put(("log", (level, msg))),
             on_done=lambda path: self._ui_queue.put(("done", path)),
             on_error=lambda err: self._ui_queue.put(("error", err)),
+            on_cancelled=lambda msg: self._ui_queue.put(("cancelled", msg)),
         )
         # Startup-/Vorverarbeitungs-Cleanup: Reste aus abgestürzten Läufen
         # entfernen, bevor die Pipeline den Ordner neu anlegt. Nur _temp,
@@ -299,10 +307,18 @@ class ProcessingScreen(Screen):
         # Projekt-spezifischer Style (Workflow) hat Vorrang vor dem
         # global gespeicherten Caption Style aus der Config.
         project_style = getattr(self, "project_caption_style", None)
+        # Block 22: editierte Segmente (tiefe Kopie, video-genau) statt
+        # Neutranskription. Nur bei vorhandenen Edits übergeben – sonst
+        # exakt der bisherige Call (Vertrag mit PipelineJob unchanged).
+        edited = self.controller.get_transcript_segments(self.video_path)
+        # Block 23: merken, ob dieser Lauf Edits verwendet (Result-Hinweis).
+        self._last_run_used_edits = edited is not None
+        extra = {"override_segments": edited} if edited is not None else {}
         self._pipeline.run_async(self.video_path, model_size=self.model,
                                  language=self.language,
                                  caption_style=project_style
-                                 if project_style else self._load_caption_style())
+                                 if project_style else self._load_caption_style(),
+                                 **extra)
 
     @staticmethod
     def _load_caption_style():
@@ -331,8 +347,16 @@ class ProcessingScreen(Screen):
                     return
                 elif kind == "error":
                     self._polling = False
+                    # Block 22: Edit-State bleibt erhalten (last_transcript wird
+                    # nur bei Erfolg geschrieben; Video-Match-Guard verhindert
+                    # veraltete Anzeige in anderen Projekten).
                     self.show_error(payload)
                     self._cleanup_temp()
+                    return
+                elif kind == "cancelled":
+                    self._polling = False
+                    # Block 22: siehe error-Zweig (Edits überleben Cancel).
+                    self.show_cancelled(payload)
                     return
         except queue.Empty:
             pass
@@ -341,12 +365,16 @@ class ProcessingScreen(Screen):
 
     @staticmethod
     def _temp_dir():
-        """Temp-Ordner neben der Anwendung (wie in der Legacy-UI)."""
-        if getattr(sys, "frozen", False):
-            base = Path(os.path.dirname(sys.executable))
-        else:
-            base = Path(__file__).parent.parent.parent  # Projektordner
-        return base / "_temp"
+        """Temp-Ordner im System-Temp (B5) – Development und Frozen identisch."""
+        try:
+            from capti_core.paths import temp_dir
+            return temp_dir()
+        except Exception:
+            if getattr(sys, "frozen", False):
+                base = Path(os.path.dirname(sys.executable))
+            else:
+                base = Path(__file__).parent.parent.parent  # Projektordner
+            return base / "_temp"
 
     @staticmethod
     def _cleanup_temp():
@@ -365,6 +393,22 @@ class ProcessingScreen(Screen):
 
     def _on_pipeline_done(self, output_path: str):
         """Pipeline erfolgreich: History-Eintrag, Result-Screen, Navigation frei."""
+        # Block 20: echtes Transkript für die Preview sichern (Main-Thread,
+        # nur Plain-Daten; Pipeline hält gruppierte Segmente + Quellvideo).
+        try:
+            pipe = getattr(self, "_pipeline", None)
+            segments = getattr(pipe, "last_segments", None)
+            if isinstance(segments, list) and segments:
+                self.controller.last_transcript = {
+                    "video_path": self.video_path,
+                    "segments": segments,
+                    "model": self.model,
+                    "language": self.language,
+                }
+            else:
+                self.controller.last_transcript = None
+        except Exception:
+            pass
         # History-Eintrag nur bei Erfolg (HistoryManager schreibt selbst)
         HistoryManager().add_entry(
             video_path=self.video_path,
@@ -380,6 +424,9 @@ class ProcessingScreen(Screen):
             filename=os.path.basename(self.video_path),
             model=self.model,
             language=self.language,
+            video_path=self.video_path,
+            caption_style=getattr(self, "project_caption_style", None),
+            with_edits=bool(getattr(self, "_last_run_used_edits", False)),
         )
         self.navigate("result")
         self._cleanup_temp()  # Erfolg: Temp-Dateien (WAV/SRT/ASS) entfernen
@@ -390,6 +437,16 @@ class ProcessingScreen(Screen):
 
     def on_hide(self):
         pass
+
+    def destroy(self):
+        """Fordert bei laufender Verarbeitung Cancel an (B2, nicht blockierend)."""
+        try:
+            pipe = getattr(self, "_pipeline", None)
+            if pipe is not None:
+                pipe.cancel()
+        except Exception:
+            pass
+        super().destroy()
 
     def _go_back(self):
         if not self._nav_locked:

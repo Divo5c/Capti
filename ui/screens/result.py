@@ -23,6 +23,13 @@ class ResultScreen(Screen):
         self.grid_columnconfigure(0, weight=1)
 
         self.output_path: str = ""
+        # Block 23: Re-Export-Kontext (Quellvideo + Lauf-Parameter des
+        # angezeigten Exports; nur Plain-Daten, keine Tk-Refs).
+        self.video_path: str = ""
+        self.model: str = None
+        self.language: str = None
+        self.caption_style: dict = None
+        self.with_edits: bool = False
 
         # ----------------------------------------------------------
         # Header
@@ -79,7 +86,14 @@ class ResultScreen(Screen):
                                         font=self.font("body", 12),
                                         anchor="w",
                                         text_color=self.color("error"), wraplength=540)
-        self.error_label.grid(row=4, column=0, sticky="w", padx=24, pady=(0, 16))
+        self.error_label.grid(row=4, column=0, sticky="w", padx=24, pady=(0, 8))
+
+        # Hinweis bei Export mit bearbeiteten Captions (Block 23)
+        self.edited_label = ctk.CTkLabel(card, text="",
+                                         font=self.font("body", 12),
+                                         anchor="w",
+                                         text_color=self.color("accent"), wraplength=540)
+        self.edited_label.grid(row=5, column=0, sticky="w", padx=24, pady=(0, 16))
 
         # ----------------------------------------------------------
         # Buttons
@@ -105,6 +119,18 @@ class ResultScreen(Screen):
             text_color=self.color("text"),
             command=self.save_as)
         btn_save.grid(row=0, column=1, sticky="w", padx=(10, 0))
+
+        # Re-Export mit aktuellem Edit-State (Block 23; nur bei
+        # passendem Transkript sichtbar, siehe _refresh_reexport).
+        self.btn_reexport = ctk.CTkButton(
+            actions, text=i18n.t("res.btn_reexport"), width=400, height=46,
+            font=self.font("body", 14), corner_radius=10,
+            fg_color="transparent", border_width=1,
+            border_color=self.color("accent"),
+            text_color=self.color("text"),
+            command=self.reexport)
+        self.btn_reexport.grid(row=1, column=0, columnspan=2, pady=(12, 0))
+        self.btn_reexport.grid_remove()
 
         nav = ctk.CTkFrame(self, fg_color="transparent")
         nav.grid(row=4, column=0, pady=(4, 24))
@@ -133,17 +159,27 @@ class ResultScreen(Screen):
     # Screen-API
     # ------------------------------------------------------------------
 
-    def set_result(self, output_path: str, filename: str = None,
-                   model: str = None, language: str = None,
-                   duration: str = None, resolution: str = None):
+    def set_result(self, output_path: str, filename: str | None = None,
+                   model: str | None = None, language: str | None = None,
+                   duration: str | None = None, resolution: str | None = None,
+                   video_path: str | None = None,
+                   caption_style: dict | None = None,
+                   with_edits: bool = False):
         """
         Setzt das Verarbeitungsergebnis.
 
         Alle optionalen Metadaten sind sicher verzichtbar; ein ungültiger
         oder nicht existierender Pfad erzeugt keinen Crash, sondern einen
-        sichtbaren Fehlerhinweis im Theme-Farbschema.
+        sichtbaren Fehlerhinweis im Theme-Farbschema. video_path/
+        caption_style/with_edits (Block 23) ermöglichen den Re-Export mit
+        aktuellem Edit-State und bleiben ohne sie wirkungslos.
         """
         self.output_path = str(output_path) if output_path else ""
+        self.video_path = str(video_path) if video_path else ""
+        self.model = model
+        self.language = language
+        self.caption_style = dict(caption_style) if isinstance(caption_style, dict) else None
+        self.with_edits = bool(with_edits)
         name = filename or (os.path.basename(self.output_path) if self.output_path else "")
         self.filename_label.configure(text=name or i18n.t("res.no_result"))
         self.path_label.configure(text=self.output_path)
@@ -157,6 +193,43 @@ class ResultScreen(Screen):
             self.error_label.configure(text=i18n.t("res.output_missing"))
         else:
             self.error_label.configure(text="")
+
+        self._refresh_reexport()
+
+    def on_show(self):
+        """Re-Export-Verfügbarkeit prüfen (Edit-State kann sich geändert haben)."""
+        self._refresh_reexport()
+
+    def _refresh_reexport(self):
+        """Zeigt Button/Hinweis nur bei passendem Transkript-State.
+
+        Guard: Quellvideo bekannt UND Controller hält Segmente desselben
+        Videos (Block-22-Match) – sonst bisheriges Verhalten.
+        """
+        has_state = bool(self.video_path) and self.controller \
+            .get_transcript_segments(self.video_path) is not None
+        if has_state:
+            self.btn_reexport.grid()
+        else:
+            self.btn_reexport.grid_remove()
+        self.edited_label.configure(
+            text=i18n.t("res.edited_hint") if (self.with_edits and has_state) else "")
+
+    def reexport(self):
+        """Startet den Re-Export mit AKTUELLEM Edit-State (Block 23).
+
+        Nutzt die bestehende Processing-/Pipeline-Mechanik inkl.
+        Block-22-Override (kein Whisper, keine neue Export-Logik).
+        No-Op ohne passenden Transkript-State (Projekt-Guard).
+        """
+        if not self.video_path or self.controller \
+                .get_transcript_segments(self.video_path) is None:
+            return
+        processing = self.controller.get_screen("processing")
+        processing.set_project(self.video_path,
+                               model=self.model or "small",
+                               language=self.language,
+                               caption_style=self.caption_style)
 
     def open_video(self):
         """Öffnet das erzeugte Video mit dem System-Standard-Programm.
@@ -200,7 +273,13 @@ class ResultScreen(Screen):
     def reset(self):
         """Setzt den Screen für das nächste Projekt zurück."""
         self.output_path = ""
+        self.video_path = ""
+        self.model = None
+        self.language = None
+        self.caption_style = None
+        self.with_edits = False
         self.filename_label.configure(text=i18n.t("res.no_result"))
         self.path_label.configure(text="")
         self.meta_label.configure(text="")
         self.error_label.configure(text="")
+        self._refresh_reexport()

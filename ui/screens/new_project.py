@@ -48,6 +48,24 @@ def _load_default_model() -> str:
     return model if model in MODEL_OPTIONS else "small"
 
 
+def resolve_language_code(label: str):
+    """Löst Anzeige-Label ODER rohen Key in den stabilen Sprachcode auf (C1).
+
+    - Rohe Keys ("np.lang.de") funktionieren weiterhin (Tests/Kompatibilität).
+    - Sichtbare Labels werden in ALLEN Sprachen erkannt (robust gegen
+      Live-Sprachwechsel): "Deutsch"/"German" -> "de" etc.
+    - Unbekannt/leer -> None (= Auto). Es wird nie ein Anzeigetext als
+      interner Code gespeichert.
+    """
+    if label in LANGUAGE_CODES:
+        return LANGUAGE_CODES[label]
+    for key, code in LANGUAGE_CODES.items():
+        for lang in i18n.TRANSLATIONS:
+            if i18n.TRANSLATIONS[lang].get(key) == label:
+                return code
+    return None
+
+
 class NewProjectScreen(Screen):
     screen_name = "new_project"
 
@@ -144,14 +162,15 @@ class NewProjectScreen(Screen):
             row=1, column=0, sticky="w", padx=20, pady=(0, 8))
         self.lang_var = ctk.StringVar(value=i18n.t("np.lang.auto"))
         self.lang_combo = ctk.CTkComboBox(
-            lang_card, variable=self.lang_var, values=LANGUAGE_KEYS,
+            lang_card, variable=self.lang_var,
+            values=[i18n.t(key) for key in LANGUAGE_KEYS],
             width=180, height=34, corner_radius=8,
             font=self.font("body", 13),
             fg_color=self.color("surface_secondary"),
             button_color=self.color("border"),
             button_hover_color=self.color("accent_hover"),
             border_color=self.color("border"),
-            text_color=self.color("text"))
+            text_color=self.color("text"), state="readonly")
         self.lang_combo.grid(row=2, column=0, sticky="w", padx=20, pady=(0, 16))
 
         # --- Übersetzung: dezente Info-Card (KEINE funktionale Auswahl) ---
@@ -306,6 +325,6 @@ class NewProjectScreen(Screen):
         self.controller.pending_project = {
             "video_path": self.video_path,
             "model": self.model_var.get(),
-            "language": LANGUAGE_CODES.get(self.lang_var.get()),
+            "language": resolve_language_code(self.lang_var.get()),
         }
         self.navigate("caption_style")

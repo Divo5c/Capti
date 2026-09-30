@@ -9,10 +9,17 @@ Capti AppController: zentrale Screen-Verwaltung und Navigation.
 Screens navigieren nie direkt untereinander – nur über den Controller.
 """
 
+import copy
 import json
 import logging
 import os
 from pathlib import Path
+
+from capti_core.project_state import (
+    ProjectState,
+    load_project,
+    save_project,
+)
 
 import customtkinter as ctk
 
@@ -97,12 +104,39 @@ class AppController:
         self._nav_buttons = {}   # name -> CTkButton
         # Projekt in Vorbereitung (New Project -> Caption Style -> Processing)
         self.pending_project: dict | None = None
+        # Letztes Transkript (Block 20): {"video_path": str, "segments": [...]}
+        # aus erfolgreichem Processing-Lauf; Caption Style zeigt es an, wenn
+        # es zum aktuellen Projekt gehört. Nur Plain-Daten, keine Tk-Refs.
+        # Block 22: trägt zusätzlich Caption-Edits (Editor-Apply schreibt
+        # hierher); Export (Pipeline-Override) liest hierher.
+        self.last_transcript: dict | None = None
+        # Block 24: zuletzt geladener/gespeicherter Projektdatei-Stand
+        # (Plain-Daten, keine Tk-Refs).
+        self.current_project_state: ProjectState | None = None
 
 
 
         FontManager.initialize()
         self._build_layout()
         self.show_screen(DEFAULT_SCREEN)
+
+    def get_transcript_segments(self, video_path: str):
+        """Editierte Transkript-Segmente für video_path (tiefe Kopie).
+
+        Gibt None zurück bei fehlendem Transkript, Video-Mismatch oder
+        leerer Segmentliste – dann läuft der bisherige Whisper-Pfad.
+        Die Kopie entkoppelt Pipeline/Export vom Session-State (keine
+        Aliase, keine Tk-Objekte).
+        """
+        last = self.last_transcript
+        if not isinstance(last, dict):
+            return None
+        if last.get("video_path") != video_path:
+            return None
+        segments = last.get("segments")
+        if not isinstance(segments, list) or not segments:
+            return None
+        return copy.deepcopy(segments)
 
     # ------------------------------------------------------------------
     # Layout: Sidebar + Screen-Container
@@ -312,3 +346,78 @@ class AppController:
         if name not in self._screens:
             self._create_screen(name)
         return self._screens[name]
+
+    # ------------------------------------------------------------------
+    # Projektdatei-Persistenz (Block 24): Transkript + Caption-Edits
+    # ------------------------------------------------------------------
+
+    def collect_project_state(self) -> ProjectState:
+        """Sammelt den aktuellen Edit-State als ProjectState (Plain-Daten).
+
+        Quelle: last_transcript (Video + editierte Segmente),
+        pending_project/last_transcript (Modell/Sprache),
+        Caption-Style-Screen (aktueller Style inkl. ungesicherter Edits).
+        """
+        last = self.last_transcript if isinstance(
+            self.last_transcript, dict) else {}
+        pending = self.pending_project if isinstance(
+            self.pending_project, dict) else {}
+        segments = last.get("segments")
+        if not isinstance(segments, list):
+            segments = []
+        try:
+            style_screen = self.get_screen("caption_style")
+            style = dict(getattr(style_screen, "style", {}) or {})
+        except Exception:
+            style = {}
+        model = pending.get("model") or last.get("model") or "small"
+        language = pending.get("language", last.get("language"))
+        return ProjectState(
+            video_path=str(last.get("video_path")
+                           or pending.get("video_path") or ""),
+            model=model,
+            language=language,
+            caption_style=style,
+            segments=copy.deepcopy(segments),
+        )
+
+    def save_project_state(self, path) -> str:
+        """Speichert den aktuellen State als Projektdatei (atomar)."""
+        state = self.collect_project_state()
+        saved = save_project(path, state)
+        self.current_project_state = state
+        return saved
+
+    def load_project_state(self, path) -> ProjectState:
+        """Lädt eine Projektdatei und übernimmt sie in den Session-State.
+
+        Setzt last_transcript (Video-Key-Isolation bleibt), pending_project
+        (passende Preview) und den Caption-Style-Screen. Lädt auch bei
+        fehlendem Video (Aufrufer prüft state.video_exists()).
+        """
+        state = load_project(path)
+        self.current_project_state = state
+        if state.segments:
+            self.last_transcript = {
+                "video_path": state.video_path,
+                "segments": copy.deepcopy(state.segments),
+                "model": state.model,
+                "language": state.language,
+            }
+        else:
+            self.last_transcript = None
+        if state.video_path:
+            self.pending_project = {
+                "video_path": state.video_path,
+                "model": state.model,
+                "language": state.language,
+            }
+        try:
+            from capti_core.caption_style import (
+                DEFAULT_CAPTION_STYLE as _DEFAULT_STYLE)
+            style_screen = self.get_screen("caption_style")
+            style_screen.style = {**_DEFAULT_STYLE, **state.caption_style}
+            style_screen._sync_ui_from_style()
+        except Exception:
+            pass
+        return state

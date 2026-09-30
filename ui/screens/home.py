@@ -10,6 +10,7 @@ import os
 import random
 from datetime import datetime
 from pathlib import Path
+from tkinter import filedialog
 
 import customtkinter as ctk
 
@@ -106,15 +107,31 @@ class HomeScreen(Screen):
             border_color=self.color("border")))
 
         # ----------------------------------------------------------
+        # 3b) Projekt öffnen (Block 24: Transkript + Edits laden)
+        # ----------------------------------------------------------
+        open_row = ctk.CTkFrame(self, fg_color="transparent")
+        open_row.grid(row=5, column=0, pady=(0, 8))
+        ctk.CTkButton(open_row, text=i18n.t("home.open_project"), width=220,
+                      height=40, font=self.font("body", 13), corner_radius=10,
+                      fg_color="transparent", border_width=1,
+                      border_color=self.color("border"),
+                      text_color=self.color("text"),
+                      command=self.open_project_file).grid(row=0, column=0)
+        self.open_status_label = ctk.CTkLabel(
+            open_row, text="", font=self.font("body", 12),
+            text_color=self.color("text_secondary"))
+        self.open_status_label.grid(row=1, column=0, pady=(6, 0))
+
+        # ----------------------------------------------------------
         # 4) Verlauf – echte History (HistoryManager)
         # ----------------------------------------------------------
         history_title = ctk.CTkLabel(self, text=i18n.t("home.history_title"),
                                      font=self.font("body", 15),
                                      text_color=self.color("text"))
-        history_title.grid(row=5, column=0, sticky="w", padx=64, pady=(28, 10))
+        history_title.grid(row=6, column=0, sticky="w", padx=64, pady=(28, 10))
 
         self._history_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self._history_frame.grid(row=6, column=0, sticky="new", padx=48, pady=(0, 12))
+        self._history_frame.grid(row=7, column=0, sticky="new", padx=48, pady=(0, 12))
         self._history_frame.grid_columnconfigure(0, weight=1)
 
         self._build_history_entries()
@@ -123,7 +140,7 @@ class HomeScreen(Screen):
         # 5) Footer: Signatur
         # ----------------------------------------------------------
         footer = ctk.CTkFrame(self, fg_color="transparent")
-        footer.grid(row=7, column=0, pady=(16, 20))
+        footer.grid(row=8, column=0, pady=(16, 20))
         ctk.CTkLabel(footer, text=i18n.t("footer.created_by"),
                      font=self.font("body", 11),
                      text_color=self.color("text_secondary")).grid(row=0, column=0)
@@ -209,6 +226,37 @@ class HomeScreen(Screen):
             resolution=entry.get("resolution") or None,
         )
         self.navigate("result")
+
+    def open_project_file(self, path: str | None = None):
+        """Lädt eine Projektdatei (Block 24) und öffnet den Caption-Editor.
+
+        Ohne Pfad wird der Datei-Dialog gezeigt. Fehler werden in der
+        Status-Zeile angezeigt (kein Popup-Spam, kein Crash).
+        """
+        from capti_core.project_state import (
+            PROJECT_EXTENSION, ProjectFileError)
+        if path is None:
+            path = filedialog.askopenfilename(
+                title=i18n.t("home.open_project"),
+                defaultextension=PROJECT_EXTENSION,
+                filetypes=[("Capti-Projekt", "*" + PROJECT_EXTENSION),
+                           ("JSON", "*.json"), ("Alle Dateien", "*.*")],
+            )
+        if not path:
+            return
+        try:
+            self.controller.load_project_state(path)
+        except ProjectFileError as exc:
+            self.open_status_label.configure(
+                text=i18n.t("home.open_failed", error=exc))
+            return
+        except Exception as exc:
+            self.open_status_label.configure(
+                text=i18n.t("home.open_failed", error=exc))
+            return
+        # State lebt im Controller (last_transcript/pending_project/Style)
+        self.open_status_label.configure(text="")
+        self.navigate("caption_style")
 
     def set_content_width(self, width: int):
         """Phase 34: CTA-Card responsiv anpassen."""
