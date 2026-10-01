@@ -2652,5 +2652,229 @@ class TestSnapPresets(unittest.TestCase):
         self.assertEqual(screen._timeline.find_withtag("snap"), ())
 
 
+class TestCaptionKeyboardNudge(unittest.TestCase):
+    """Block 48: Caption-Nudge per Tastatur (Priorität WORD > CAPTION)."""
+
+    @classmethod
+    def setUpClass(cls):
+        ctk.set_appearance_mode("dark")
+        cls.root = ctk.CTk()
+        cls.root.withdraw()
+
+    @classmethod
+    def tearDownClass(cls):
+        import contextlib
+        with contextlib.suppress(Exception):
+            cls.root.destroy()
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.config_path = Path(self.tmp.name) / "config.json"
+        self.patcher = patch.object(cs_mod, "_config_file",
+                                    return_value=self.config_path)
+        self.patcher.start()
+        self._prev_lang = i18n.get_language()
+        i18n.set_language("de")
+        self._prev_cfg = os.environ.get("CAPTI_CONFIG_FILE")
+        os.environ["CAPTI_CONFIG_FILE"] = str(self.config_path)
+        self.controller = AppController(self.root)
+        self.screen = self.controller.get_screen("caption_style")
+        self.controller.pending_project = {"video_path": VIDEO_A,
+                                           "model": "tiny", "language": "de"}
+        self.controller.last_transcript = {
+            "video_path": VIDEO_A, "segments": _segments()}
+        self.screen.on_show()
+
+    def tearDown(self):
+        i18n.set_language(self._prev_lang)
+        self.patcher.stop()
+        if self._prev_cfg is None:
+            os.environ.pop("CAPTI_CONFIG_FILE", None)
+        else:
+            os.environ["CAPTI_CONFIG_FILE"] = self._prev_cfg
+        self.tmp.cleanup()
+        import contextlib
+        with contextlib.suppress(Exception):
+            self.screen.destroy()
+
+    # -- Helfer ----------------------------------------------------
+
+    def _select_caption(self, idx):
+        labels = list(self.screen._editor_option.cget("values"))
+        self.screen._editor_option.set(labels[idx])
+        self.screen._on_editor_select(None)
+        self.screen._word_index = None  # kein Word-Kontext -> Caption
+
+    def _select_word(self, idx):
+        labels = list(self.screen._word_option.cget("values"))
+        self.screen._word_option.set(labels[idx])
+        self.screen._on_word_select(None)
+
+    def _key(self, keysym, state=0):
+        with patch.object(type(self.screen), "focus_get",
+                          return_value=self.screen._timeline):
+            return self.screen._on_nudge_key(
+                SimpleNamespace(keysym=keysym, state=state))
+
+    def _ckey(self, keysym, state=0):
+        """Caption-Taste: Word-Kontext löschen (Refresh wählt sonst
+        Wort 0 vor), dann Taste (Priorität WORD > CAPTION)."""
+        self.screen._word_index = None
+        return self._key(keysym, state)
+
+    def _span(self, idx=1):
+        seg = self.screen._transcript_segments[idx]
+        return (seg["start"], seg["end"])
+
+    def _assertSpan(self, expected, idx=1):
+        got = self._span(idx)
+        self.assertAlmostEqual(got[0], expected[0])
+        self.assertAlmostEqual(got[1], expected[1])
+
+    def _history(self, idx=1):
+        return self.screen._undo_histories.get(idx)
+
+    # -- Tests -----------------------------------------------------
+
+    def test_left_right_start(self):
+        self._select_caption(1)
+        self.assertEqual(self._ckey("Left"), "break")
+        self._assertSpan((4.95, 7.0))
+        self.assertEqual(self._ckey("Right"), "break")
+        self._assertSpan((5.0, 7.0))
+
+    def test_shift_left_right_end(self):
+        self._select_caption(1)
+        self.assertEqual(self._ckey("Right", state=1), "break")
+        self._assertSpan((5.0, 7.05))
+        self.assertEqual(self._ckey("Left", state=1), "break")
+        self._assertSpan((5.0, 7.0))
+
+    def test_start_nudge_keeps_end(self):
+        self._select_caption(1)
+        self._ckey("Left")
+        self.assertAlmostEqual(self._span()[1], 7.0)
+
+    def test_end_nudge_keeps_start(self):
+        self._select_caption(1)
+        self._ckey("Right", state=1)
+        self.assertAlmostEqual(self._span()[0], 5.0)
+
+    def test_success_one_history_step(self):
+        self._select_caption(1)
+        self._ckey("Left")
+        self.assertEqual(self._history().depth, 2)
+        self.assertEqual(
+            str(self.screen._undo_btn.cget("state")), "normal")
+
+    def test_invalid_no_history_step(self):
+        self._select_caption(0)
+        self.assertEqual(self._ckey("Left"), "break")
+        self._assertSpan((0.0, 2.0), 0)
+        self.assertIsNone(self._history(0))
+        self.assertEqual(
+            str(self.screen._undo_btn.cget("state")), "disabled")
+
+    def test_undo_restores(self):
+        self._select_caption(1)
+        self._ckey("Left")
+        self._ckey("Right", state=1)
+        self._assertSpan((4.95, 7.05))
+        self.screen._on_undo()
+        self._assertSpan((4.95, 7.0))
+        self.screen._on_undo()
+        self._assertSpan((5.0, 7.0))
+
+    def test_redo_restores(self):
+        self._select_caption(1)
+        self._ckey("Left")
+        self.screen._on_undo()
+        self._assertSpan((5.0, 7.0))
+        self.screen._on_redo()
+        self._assertSpan((4.95, 7.0))
+
+    def test_live_step(self):
+        from config import set_config_value
+        from ui.screens import settings as settings_mod
+        from ui.screens.caption_style import get_nudge_step
+        self._select_caption(1)
+        self.assertTrue(set_config_value(
+            settings_mod.NUDGE_STEP_KEY, 0.15))
+        self.assertAlmostEqual(get_nudge_step(), 0.15)
+        before = self._span()[0]
+        self._ckey("Left")
+        self.assertAlmostEqual(before - self._span()[0], 0.15)
+        self.assertTrue(set_config_value(
+            settings_mod.NUDGE_STEP_KEY, 0.50))
+        self.assertAlmostEqual(get_nudge_step(), 0.50)
+        before = self._span()[0]
+        self._ckey("Left")
+        self.assertAlmostEqual(before - self._span()[0], 0.50)
+
+    def test_word_context_wins(self):
+        self._select_caption(1)
+        self._select_word(1)
+        self.assertEqual(self._key("Left"), "break")
+        words = self.screen._transcript_segments[1]["words"]
+        self.assertAlmostEqual(words[1]["start"], 5.85)
+        self._assertSpan((5.0, 7.0))
+        self._select_word(0)
+        self.assertEqual(self._key("Right", state=1), "break")
+        words = self.screen._transcript_segments[1]["words"]
+        self.assertAlmostEqual(words[0]["end"], 5.85)
+        self._assertSpan((5.0, 7.0))
+
+    def test_nothing_without_caption(self):
+        before = copy.deepcopy(self.screen._transcript_segments)
+        self.screen._editor_index = None
+        self.assertEqual(self._ckey("Left"), "break")
+        self.assertEqual(self._ckey("Right", state=1), "break")
+        self.assertEqual(self.screen._transcript_segments, before)
+
+    def test_invalid_keeps_redo_branch(self):
+        self._select_caption(1)
+        self._ckey("Left")
+        self.screen._on_undo()
+        self._ckey("Left", state=1)  # ungültig: 6.95 < Wort-Ende 7.0
+        self._assertSpan((5.0, 7.0))
+        self.assertEqual(
+            str(self.screen._redo_btn.cget("state")), "normal")
+
+    def test_containment_rejected(self):
+        self._select_caption(1)
+        self.assertEqual(self._ckey("Left", state=1), "break")
+        self._assertSpan((5.0, 7.0))
+        self.assertIsNone(self._history())
+
+    def test_save_load_roundtrip(self):
+        self._select_caption(1)
+        self._ckey("Left")
+        self._ckey("Right", state=1)
+        proj = str(Path(self.tmp.name) / "capkey.capti.json")
+        self.controller.save_project_state(proj)
+        self.controller.last_transcript = None
+        self.controller.pending_project = None
+        self.screen.clear_transcript()
+        self.controller.load_project_state(proj)
+        seg = self.controller.last_transcript["segments"][1]
+        self.assertAlmostEqual(seg["start"], 4.95)
+        self.assertAlmostEqual(seg["end"], 7.05)
+        self.assertEqual(seg["text"], "Second here")
+        self.assertAlmostEqual(seg["words"][0]["start"], 5.0)
+        self.assertAlmostEqual(seg["words"][1]["end"], 7.0)
+
+    def test_preview_controller_sync(self):
+        self._select_caption(1)
+        self._ckey("Left")
+        ctrl = self.controller.last_transcript["segments"][1]
+        self.assertAlmostEqual(ctrl["start"], 4.95)
+        self.assertAlmostEqual(ctrl["end"], 7.0)
+        model_cap = self.screen._transcript_captions[1]
+        self.assertAlmostEqual(model_cap.start, 4.95)
+        self.assertAlmostEqual(model_cap.end, 7.0)
+        preview = self.screen._preview_caption
+        self.assertIsNotNone(preview)
+
+
 if __name__ == "__main__":
     unittest.main()

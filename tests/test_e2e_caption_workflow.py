@@ -1495,6 +1495,101 @@ class TestE2EUI(unittest.TestCase):
             [(w["word"], w["start"], w["end"]) for w in ass_words],
             preview_words)
 
+    def test_e2e_caption_keyboard_nudge_chain(self):
+        """Block 48: Keyboard Start-/End-Nudge -> Undo -> Redo -> Save
+        -> Load -> Preview -> Override -> ASS.
+
+        Kette: Editor == Controller == RenderModel == ProjectState
+        == Reload == Override == ASS-Input; Whisper wird übersprungen.
+        """
+        from types import SimpleNamespace
+
+        video = "C:/vids/clip.mp4"
+        segments = [{
+            "start": 5.0, "end": 8.0, "text": "eins zwei",
+            "words": [{"word": "eins", "start": 5.4, "end": 6.0},
+                      {"word": "zwei", "start": 6.5, "end": 7.0}],
+        }]
+        old_env = os.environ.get("CAPTI_CONFIG_FILE")
+        os.environ["CAPTI_CONFIG_FILE"] = str(Path(self.tmp.name)
+                                              / "config.json")
+        try:
+            self.controller.pending_project = {"video_path": video,
+                                               "model": "tiny",
+                                               "language": "de"}
+            self.controller.last_transcript = {
+                "video_path": video, "segments": segments,
+                "model": "tiny", "language": "de"}
+            screen = self.controller.get_screen("caption_style")
+            screen.on_show()
+            labels = list(screen._editor_option.cget("values"))
+            screen._editor_option.set(labels[0])
+            screen._on_editor_select(None)
+            screen._word_index = None
+
+            def key(keysym, state=0):
+                # Caption-Kontext: Commit-Refresh wählt sonst Wort 0 vor:
+                screen._word_index = None
+                with patch.object(type(screen), "focus_get",
+                                  return_value=screen._timeline):
+                    return screen._on_nudge_key(
+                        SimpleNamespace(keysym=keysym, state=state))
+
+            # Start -0.05, Ende +0.05 (exakt, kein Snap):
+            self.assertEqual(key("Left"), "break")
+            self.assertEqual(key("Right", state=1), "break")
+            editor = screen._transcript_segments[0]
+            self.assertAlmostEqual(editor["start"], 4.95)
+            self.assertAlmostEqual(editor["end"], 8.05)
+            self.assertEqual(editor["text"], "eins zwei")
+            self.assertEqual(
+                [(w["word"], w["start"], w["end"])
+                 for w in editor["words"]],
+                [("eins", 5.4, 6.0), ("zwei", 6.5, 7.0)])
+            # Undo -> Undo -> Redo -> Redo:
+            screen._on_undo()
+            self.assertAlmostEqual(
+                screen._transcript_segments[0]["end"], 8.0)
+            screen._on_undo()
+            self.assertAlmostEqual(
+                screen._transcript_segments[0]["start"], 5.0)
+            screen._on_redo()
+            screen._on_redo()
+            editor = screen._transcript_segments[0]
+            self.assertAlmostEqual(editor["start"], 4.95)
+            self.assertAlmostEqual(editor["end"], 8.05)
+            self.controller.save_project_state(self.proj_path)
+        finally:
+            if old_env is None:
+                os.environ.pop("CAPTI_CONFIG_FILE", None)
+            else:
+                os.environ["CAPTI_CONFIG_FILE"] = old_env
+        self.controller.last_transcript = None
+        self.controller.pending_project = None
+        screen.clear_transcript()
+        loaded = load_project(self.proj_path)
+        self.assertAlmostEqual(loaded.segments[0]["start"], 4.95)
+        self.assertAlmostEqual(loaded.segments[0]["end"], 8.05)
+        self.assertEqual(loaded.segments[0]["text"], "eins zwei")
+        self.controller.load_project_state(self.proj_path)
+        screen.on_show()
+        preview_words = [(w.word, w.start, w.end)
+                         for w in screen._preview_caption.words]
+        self.assertEqual(preview_words,
+                         [(w["word"], w["start"], w["end"])
+                          for w in loaded.segments[0]["words"]])
+        tmp = _tmpdir(self)
+        captured = {}
+        _pipe, engine, _out, _srt = _run(
+            self, tmp, captured, override=loaded.segments)
+        engine.transcribe.assert_not_called()
+        self.assertAlmostEqual(captured["ass_segments"][0]["start"], 4.95)
+        self.assertAlmostEqual(captured["ass_segments"][0]["end"], 8.05)
+        ass_words = captured["ass_segments"][0]["words"]
+        self.assertEqual(
+            [(w["word"], w["start"], w["end"]) for w in ass_words],
+            preview_words)
+
     def test_e2e_snap_indicator_chain(self):
         """Block 40: Snap-Indikator ist rein temporär (kein Persistenz-
         oder Export-Effekt); Kette Editor == Reload == Override == ASS.

@@ -2240,12 +2240,15 @@ class CaptionStyleScreen(Screen):
             return False
 
     def _on_nudge_key(self, event=None):
-        """Pfeil links/rechts -> Start ±0,05 s (Block 32).
+        """Pfeil links/rechts -> Start ±Step, Shift+Pfeil -> Ende ±Step.
 
-        Shift+Pfeil -> Ende ±0,05 s. Nutzt exakt denselben Pfad wie
-        die Buttons (_on_nudge -> set_word_timing -> _commit_draft
-        -> History). Ctrl/Alt-Kombis und andere Tasten bleiben
-        unberührt (None = keine Aktion).
+        Priorität WORD > CAPTION > NOTHING (Block 48): Bei gültigem
+        Word-Kontext exakt der bisherige Word-Pfad (_on_nudge ->
+        set_word_timing -> _commit_draft -> History); sonst, bei
+        aktiver Caption, derselbe Pfad wie die Caption-Buttons
+        (_on_caption_nudge -> set_caption_timing). Step immer live
+        über get_nudge_step(). Ctrl/Alt-Kombis und andere Tasten
+        bleiben unberührt (None = keine Aktion).
         """
         try:
             keysym = getattr(event, "keysym", "")
@@ -2263,7 +2266,14 @@ class CaptionStyleScreen(Screen):
         if not self._nudge_key_guard():
             return None
         which = "end" if (state & 0x0001) else "start"
-        self._on_nudge(which, delta)
+        _idx, draft = self._current_draft()
+        if draft is None:
+            return "break"
+        widx = self._word_index
+        if widx is not None and 0 <= widx < len(draft.words):
+            self._on_nudge(which, delta)
+        else:
+            self._on_caption_nudge(which, delta)
         return "break"
 
     # ------------------------------------------------------------------
