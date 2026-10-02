@@ -1526,6 +1526,9 @@ class TestE2EUI(unittest.TestCase):
             screen._editor_option.set(labels[0])
             screen._on_editor_select(None)
             screen._word_index = None
+            # Block 50: Caption-Hint vorhanden, zeigt Live-Step:
+            hint = screen._cap_key_hint_label.cget("text")
+            self.assertIn("0,05", hint)
 
             def key(keysym, state=0):
                 # Caption-Kontext: Commit-Refresh wählt sonst Wort 0 vor:

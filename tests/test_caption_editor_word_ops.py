@@ -2876,5 +2876,131 @@ class TestCaptionKeyboardNudge(unittest.TestCase):
         self.assertIsNotNone(preview)
 
 
+class TestCaptionKeyHint(unittest.TestCase):
+    """Block 50: Caption-Keyboard-Hinweis (Anzeige, live Step)."""
+
+    @classmethod
+    def setUpClass(cls):
+        ctk.set_appearance_mode("dark")
+        cls.root = ctk.CTk()
+        cls.root.withdraw()
+
+    @classmethod
+    def tearDownClass(cls):
+        import contextlib
+        with contextlib.suppress(Exception):
+            cls.root.destroy()
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.config_path = Path(self.tmp.name) / "config.json"
+        self.patcher = patch.object(cs_mod, "_config_file",
+                                    return_value=self.config_path)
+        self.patcher.start()
+        self._prev_lang = i18n.get_language()
+        i18n.set_language("de")
+        self._prev_cfg = os.environ.get("CAPTI_CONFIG_FILE")
+        os.environ["CAPTI_CONFIG_FILE"] = str(self.config_path)
+        self.controller = AppController(self.root)
+        self.screen = self.controller.get_screen("caption_style")
+        self.controller.pending_project = {"video_path": VIDEO_A,
+                                           "model": "tiny", "language": "de"}
+        self.controller.last_transcript = {
+            "video_path": VIDEO_A, "segments": _segments()}
+        self.screen.on_show()
+
+    def tearDown(self):
+        i18n.set_language(self._prev_lang)
+        self.patcher.stop()
+        if self._prev_cfg is None:
+            os.environ.pop("CAPTI_CONFIG_FILE", None)
+        else:
+            os.environ["CAPTI_CONFIG_FILE"] = self._prev_cfg
+        self.tmp.cleanup()
+        import contextlib
+        with contextlib.suppress(Exception):
+            self.screen.destroy()
+
+    # -- Tests -----------------------------------------------------
+
+    def test_hint_exists_in_caption_card(self):
+        hint = self.screen._cap_key_hint_label
+        self.assertIs(hint.master, self.screen._editor_card)
+        self.assertIn(hint, self.screen._editor_card.winfo_children())
+
+    def test_de_text(self):
+        i18n.set_language("de")
+        self.screen._refresh_nudge_hint()
+        text = self.screen._cap_key_hint_label.cget("text")
+        self.assertIn("Tastatur", text)
+        self.assertIn("Shift", text)
+        self.assertIn("0,05", text)
+
+    def test_en_text(self):
+        i18n.set_language("en")
+        self.screen._refresh_nudge_hint()
+        text = self.screen._cap_key_hint_label.cget("text")
+        self.assertIn("Keyboard", text)
+        self.assertIn("Shift", text)
+        self.assertIn("0.05", text)
+
+    def test_live_step(self):
+        from config import set_config_value
+        from ui.screens import settings as settings_mod
+        i18n.set_language("de")
+        self.assertTrue(set_config_value(
+            settings_mod.NUDGE_STEP_KEY, 0.15))
+        self.screen._refresh_nudge_hint()
+        self.assertIn(
+            "0,15", self.screen._cap_key_hint_label.cget("text"))
+        self.assertTrue(set_config_value(
+            settings_mod.NUDGE_STEP_KEY, 0.50))
+        self.screen._refresh_nudge_hint()
+        self.assertIn(
+            "0,50", self.screen._cap_key_hint_label.cget("text"))
+
+    def test_refresh_no_history_no_change(self):
+        labels = list(self.screen._editor_option.cget("values"))
+        self.screen._editor_option.set(labels[1])
+        self.screen._on_editor_select(None)
+        before = copy.deepcopy(self.screen._transcript_segments)
+        self.screen._refresh_nudge_hint()
+        self.screen._refresh_cap_key_hint()
+        self.assertEqual(self.screen._transcript_segments, before)
+        self.assertEqual(dict(self.screen._undo_histories), {})
+
+    def test_word_hint_intact(self):
+        self.screen._refresh_nudge_hint()
+        text = self.screen._nudge_hint_label.cget("text")
+        self.assertIn("Schritt", text)
+        self.assertIn("0,05", text)
+
+    def test_keyboard_still_works(self):
+        labels = list(self.screen._editor_option.cget("values"))
+        self.screen._editor_option.set(labels[1])
+        self.screen._on_editor_select(None)
+        self.screen._word_index = None
+        with patch.object(type(self.screen), "focus_get",
+                          return_value=self.screen._timeline):
+            self.screen._on_nudge_key(
+                SimpleNamespace(keysym="Left", state=0))
+        seg = self.screen._transcript_segments[1]
+        self.assertAlmostEqual(seg["start"], 4.95)
+
+    def test_guards_unchanged(self):
+        before = copy.deepcopy(self.screen._transcript_segments)
+        with patch.object(type(self.screen), "focus_get",
+                          return_value=self.screen._word_start_entry):
+            self.assertIsNone(self.screen._on_nudge_key(
+                SimpleNamespace(keysym="Left", state=0)))
+        with patch.object(type(self.screen), "focus_get",
+                          return_value=self.screen._timeline):
+            self.assertIsNone(self.screen._on_nudge_key(
+                SimpleNamespace(keysym="Left", state=4)))
+            self.assertIsNone(self.screen._on_nudge_key(
+                SimpleNamespace(keysym="Right", state=8)))
+        self.assertEqual(self.screen._transcript_segments, before)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1034,17 +1034,24 @@ class CaptionStyleScreen(Screen):
             text_color=self.color("text"),
             command=lambda: self._on_caption_nudge("end", get_nudge_step()))
         self._cap_end_plus_btn.grid(row=0, column=1)
+        # Caption-Keyboard-Hinweis (Block 50): kompakt unter den
+        # Caption-Nudge-Buttons, Schrittwert live aus get_nudge_step().
+        self._cap_key_hint_label = ctk.CTkLabel(
+            card, text="", font=self.font("technical", 11), anchor="w",
+            text_color=self.color("text_secondary"))
+        self._cap_key_hint_label.grid(row=6, column=0, columnspan=2,
+                                      sticky="w", padx=24, pady=(0, 2))
         ctk.CTkLabel(card, text=i18n.t("cs.editor_words"),
                      font=self.font("body", 13), anchor="w",
                      text_color=self.color("text")).grid(
-            row=6, column=0, sticky="nw", padx=24, pady=6)
+            row=7, column=0, sticky="nw", padx=24, pady=6)
         self._editor_words_box = ctk.CTkTextbox(
             card, width=420, height=84, corner_radius=8,
             font=self.font("technical", 12),
             fg_color=self.color("surface_secondary"),
             border_color=self.color("border"),
             text_color=self.color("text"))
-        self._editor_words_box.grid(row=6, column=1, sticky="ew",
+        self._editor_words_box.grid(row=7, column=1, sticky="ew",
                                     padx=(0, 24), pady=6)
         self._editor_apply = ctk.CTkButton(
             card, text=i18n.t("cs.editor_apply"), width=160, height=36,
@@ -1053,20 +1060,20 @@ class CaptionStyleScreen(Screen):
             hover_color=self.color("accent_hover"),
             text_color="#1a1a1a",
             command=self._on_editor_apply)
-        self._editor_apply.grid(row=7, column=1, sticky="e",
+        self._editor_apply.grid(row=8, column=1, sticky="e",
                                 padx=(0, 24), pady=(6, 4))
         self._editor_hint = ctk.CTkLabel(
             card, text="", font=self.font("body", 12), anchor="w",
             text_color=self.color("text_secondary"), wraplength=520,
             justify="left")
-        self._editor_hint.grid(row=8, column=0, columnspan=2, sticky="w",
+        self._editor_hint.grid(row=9, column=0, columnspan=2, sticky="w",
                                padx=24, pady=(0, 8))
         # --- Word-Zeile (Block 25): Auswahl + Timing-Edit + Split/Merge ---
         self._word_index = None
         ctk.CTkLabel(card, text=i18n.t("cs.word_label"),
                      font=self.font("body", 13), anchor="w",
                      text_color=self.color("text")).grid(
-            row=9, column=0, sticky="w", padx=24, pady=6)
+            row=10, column=0, sticky="w", padx=24, pady=6)
         self._word_option = ctk.CTkOptionMenu(
             card, values=["–"], width=420, height=32, corner_radius=8,
             font=self.font("body", 13),
@@ -1075,14 +1082,14 @@ class CaptionStyleScreen(Screen):
             button_hover_color=self.color("accent_hover"),
             text_color=self.color("text"),
             command=self._on_word_select)
-        self._word_option.grid(row=9, column=1, sticky="ew",
+        self._word_option.grid(row=10, column=1, sticky="ew",
                                padx=(0, 24), pady=6)
         ctk.CTkLabel(card, text=i18n.t("cs.word_times"),
                      font=self.font("body", 13), anchor="w",
                      text_color=self.color("text")).grid(
-            row=10, column=0, sticky="w", padx=24, pady=6)
+            row=11, column=0, sticky="w", padx=24, pady=6)
         time_row = ctk.CTkFrame(card, fg_color="transparent")
-        time_row.grid(row=10, column=1, sticky="ew", padx=(0, 24), pady=6)
+        time_row.grid(row=11, column=1, sticky="ew", padx=(0, 24), pady=6)
         self._word_start_entry = ctk.CTkEntry(
             time_row, width=110, height=32, corner_radius=8,
             font=self.font("technical", 12),
@@ -1166,14 +1173,14 @@ class CaptionStyleScreen(Screen):
             card, width=self._timeline_w, height=self._timeline_h,
             bg=self.color("surface_secondary"), highlightthickness=1,
             highlightbackground=self.color("border"))
-        self._timeline.grid(row=11, column=0, columnspan=2,
+        self._timeline.grid(row=12, column=0, columnspan=2,
                             padx=24, pady=(2, 6), sticky="ew")
         self._timeline.bind("<Button-1>", self._on_timeline_press)
         self._timeline.bind("<B1-Motion>", self._on_timeline_move)
         self._timeline.bind("<ButtonRelease-1>", self._on_timeline_release)
         self._timeline_drag = None
         op_row = ctk.CTkFrame(card, fg_color="transparent")
-        op_row.grid(row=12, column=1, sticky="ew", padx=(0, 24), pady=(0, 4))
+        op_row.grid(row=13, column=1, sticky="ew", padx=(0, 24), pady=(0, 4))
         self._word_split_btn = ctk.CTkButton(
             op_row, text=i18n.t("cs.word_split"), width=130, height=32,
             font=self.font("body", 12), corner_radius=8,
@@ -1193,11 +1200,11 @@ class CaptionStyleScreen(Screen):
         self._word_info_label = ctk.CTkLabel(
             card, text="", font=self.font("technical", 12), anchor="w",
             text_color=self.color("text_secondary"))
-        self._word_info_label.grid(row=13, column=1, sticky="w",
+        self._word_info_label.grid(row=14, column=1, sticky="w",
                                    padx=(0, 24), pady=(0, 4))
         # --- Manuelle Wort-Ops (Block 28): Split-Punkt/Insert/Delete ---
         split_row = ctk.CTkFrame(card, fg_color="transparent")
-        split_row.grid(row=15, column=1, sticky="ew",
+        split_row.grid(row=16, column=1, sticky="ew",
                        padx=(0, 24), pady=(6, 4))
         self._split_index_entry = ctk.CTkEntry(
             split_row, width=70, height=32, corner_radius=8,
@@ -1224,7 +1231,7 @@ class CaptionStyleScreen(Screen):
             command=self._on_word_delete)
         self._word_delete_btn.grid(row=0, column=2)
         insert_row = ctk.CTkFrame(card, fg_color="transparent")
-        insert_row.grid(row=16, column=1, sticky="ew",
+        insert_row.grid(row=17, column=1, sticky="ew",
                         padx=(0, 24), pady=(0, 4))
         self._insert_word_entry = ctk.CTkEntry(
             insert_row, width=150, height=32, corner_radius=8,
@@ -1256,7 +1263,7 @@ class CaptionStyleScreen(Screen):
         self._undo_histories = {}
         self._history_key = None
         undo_row = ctk.CTkFrame(card, fg_color="transparent")
-        undo_row.grid(row=14, column=1, sticky="ew",
+        undo_row.grid(row=15, column=1, sticky="ew",
                       padx=(0, 24), pady=(0, 16))
         self._undo_btn = ctk.CTkButton(
             undo_row, text=i18n.t("cs.editor_undo"), width=130, height=32,
@@ -1435,10 +1442,20 @@ class CaptionStyleScreen(Screen):
         self._nudge_hint_label.grid()
 
     def _refresh_nudge_hint(self):
-        """Shortcut-Hinweis aus get_nudge_step() neu setzen."""
+        """Shortcut-Hinweise aus get_nudge_step() neu setzen."""
         try:
             self._nudge_hint_label.configure(
                 text=i18n.t("cs.timing_hint", step=_format_nudge_step()))
+        except Exception:
+            pass
+        self._refresh_cap_key_hint()
+
+    def _refresh_cap_key_hint(self):
+        """Caption-Keyboard-Hinweis aus get_nudge_step() neu setzen."""
+        try:
+            self._cap_key_hint_label.configure(
+                text=i18n.t("cs.caption_key_hint",
+                            step=_format_nudge_step()))
         except Exception:
             pass
 
