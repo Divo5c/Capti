@@ -3002,5 +3002,199 @@ class TestCaptionKeyHint(unittest.TestCase):
         self.assertEqual(self.screen._transcript_segments, before)
 
 
+class TestCaptionExactTime(unittest.TestCase):
+    """Block 52: exakte Caption-Zeiten per Eingabe + Übernehmen."""
+
+    @classmethod
+    def setUpClass(cls):
+        ctk.set_appearance_mode("dark")
+        cls.root = ctk.CTk()
+        cls.root.withdraw()
+
+    @classmethod
+    def tearDownClass(cls):
+        import contextlib
+        with contextlib.suppress(Exception):
+            cls.root.destroy()
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.config_path = Path(self.tmp.name) / "config.json"
+        self.patcher = patch.object(cs_mod, "_config_file",
+                                    return_value=self.config_path)
+        self.patcher.start()
+        self._prev_lang = i18n.get_language()
+        i18n.set_language("de")
+        self._prev_cfg = os.environ.get("CAPTI_CONFIG_FILE")
+        os.environ["CAPTI_CONFIG_FILE"] = str(self.config_path)
+        self.controller = AppController(self.root)
+        self.screen = self.controller.get_screen("caption_style")
+        self.controller.pending_project = {"video_path": VIDEO_A,
+                                           "model": "tiny", "language": "de"}
+        self.controller.last_transcript = {
+            "video_path": VIDEO_A, "segments": _segments()}
+        self.screen.on_show()
+
+    def tearDown(self):
+        i18n.set_language(self._prev_lang)
+        self.patcher.stop()
+        if self._prev_cfg is None:
+            os.environ.pop("CAPTI_CONFIG_FILE", None)
+        else:
+            os.environ["CAPTI_CONFIG_FILE"] = self._prev_cfg
+        self.tmp.cleanup()
+        import contextlib
+        with contextlib.suppress(Exception):
+            self.screen.destroy()
+
+    # -- Helfer ----------------------------------------------------
+
+    def _select_caption(self, idx):
+        labels = list(self.screen._editor_option.cget("values"))
+        self.screen._editor_option.set(labels[idx])
+        self.screen._on_editor_select(None)
+
+    def _set_times(self, start, end):
+        self.screen._cap_start_entry.delete(0, "end")
+        self.screen._cap_start_entry.insert(0, start)
+        self.screen._cap_end_entry.delete(0, "end")
+        self.screen._cap_end_entry.insert(0, end)
+
+    def _span(self, idx=1):
+        seg = self.screen._transcript_segments[idx]
+        return (seg["start"], seg["end"])
+
+    def _history(self, idx=1):
+        return self.screen._undo_histories.get(idx)
+
+    # -- Tests -----------------------------------------------------
+
+    def test_prefill_on_select(self):
+        self._select_caption(1)
+        self.assertEqual(self.screen._cap_start_entry.get(), "5.000")
+        self.assertEqual(self.screen._cap_end_entry.get(), "7.000")
+
+    def test_valid_exact_apply(self):
+        self._select_caption(1)
+        self._set_times("4.5", "7.25")
+        self.screen._on_editor_apply()
+        seg = self.screen._transcript_segments[1]
+        self.assertAlmostEqual(seg["start"], 4.5)
+        self.assertAlmostEqual(seg["end"], 7.25)
+        self.assertEqual(seg["text"], "Second here")
+        self.assertAlmostEqual(seg["words"][0]["start"], 5.0)
+        self.assertAlmostEqual(seg["words"][1]["end"], 7.0)
+
+    def test_empty_entries_text_only(self):
+        self._select_caption(1)
+        self._set_times("", "")
+        self.screen._editor_entry.delete(0, "end")
+        self.screen._editor_entry.insert(0, "Second here!")
+        self.screen._on_editor_apply()
+        seg = self.screen._transcript_segments[1]
+        self.assertEqual(seg["text"], "Second here!")
+        self.assertAlmostEqual(seg["start"], 5.0)
+        self.assertAlmostEqual(seg["end"], 7.0)
+
+    def test_garbage_rejected(self):
+        self._select_caption(1)
+        self._set_times("abc", "7.25")
+        self.screen._on_editor_apply()
+        self.assertAlmostEqual(self._span()[0], 5.0)
+        self.assertAlmostEqual(self._span()[1], 7.0)
+        self.assertIsNone(self._history())
+        self.assertTrue(self.screen._editor_hint.cget("text"))
+
+    def test_partial_start_only(self):
+        self._select_caption(1)
+        self._set_times("4.75", "")
+        self.screen._on_editor_apply()
+        self.assertAlmostEqual(self._span()[0], 4.75)
+        self.assertAlmostEqual(self._span()[1], 7.0)
+
+    def test_end_before_start_rejected(self):
+        self._select_caption(1)
+        self._set_times("6.0", "5.0")
+        self.screen._on_editor_apply()
+        self.assertAlmostEqual(self._span()[0], 5.0)
+        self.assertAlmostEqual(self._span()[1], 7.0)
+        self.assertIsNone(self._history())
+
+    def test_word_outside_rejected(self):
+        self._select_caption(1)
+        self._set_times("5.0", "5.85")
+        self.screen._on_editor_apply()
+        self.assertAlmostEqual(self._span()[1], 7.0)
+        self.assertIsNone(self._history())
+
+    def test_nonfinite_rejected(self):
+        self._select_caption(1)
+        self._set_times("inf", "7.0")
+        self.screen._on_editor_apply()
+        self.assertAlmostEqual(self._span()[0], 5.0)
+        self.assertIsNone(self._history())
+
+    def test_comma_input(self):
+        self._select_caption(1)
+        self._set_times("4,5", "7,25")
+        self.screen._on_editor_apply()
+        self.assertAlmostEqual(self._span()[0], 4.5)
+        self.assertAlmostEqual(self._span()[1], 7.25)
+
+    def test_success_one_history_step(self):
+        self._select_caption(1)
+        self._set_times("4.5", "7.25")
+        self.screen._on_editor_apply()
+        self.assertEqual(self._history().depth, 2)
+
+    def test_undo_redo(self):
+        self._select_caption(1)
+        self._set_times("4.5", "7.25")
+        self.screen._on_editor_apply()
+        self.screen._on_undo()
+        self.assertAlmostEqual(self._span()[0], 5.0)
+        self.assertAlmostEqual(self._span()[1], 7.0)
+        self.screen._on_redo()
+        self.assertAlmostEqual(self._span()[0], 4.5)
+        self.assertAlmostEqual(self._span()[1], 7.25)
+
+    def test_failed_apply_keeps_redo(self):
+        self._select_caption(1)
+        self._set_times("4.5", "7.25")
+        self.screen._on_editor_apply()
+        self.screen._on_undo()
+        self._set_times("abc", "7.0")
+        self.screen._on_editor_apply()
+        self.assertAlmostEqual(self._span()[0], 5.0)
+        self.assertEqual(
+            str(self.screen._redo_btn.cget("state")), "normal")
+
+    def test_save_load_roundtrip(self):
+        self._select_caption(1)
+        self._set_times("4.5", "7.25")
+        self.screen._on_editor_apply()
+        proj = str(Path(self.tmp.name) / "capexact.capti.json")
+        self.controller.save_project_state(proj)
+        self.controller.last_transcript = None
+        self.controller.pending_project = None
+        self.screen.clear_transcript()
+        self.controller.load_project_state(proj)
+        seg = self.controller.last_transcript["segments"][1]
+        self.assertAlmostEqual(seg["start"], 4.5)
+        self.assertAlmostEqual(seg["end"], 7.25)
+        self.assertEqual(seg["text"], "Second here")
+
+    def test_preview_controller_sync(self):
+        self._select_caption(1)
+        self._set_times("4.5", "7.25")
+        self.screen._on_editor_apply()
+        ctrl = self.controller.last_transcript["segments"][1]
+        self.assertAlmostEqual(ctrl["start"], 4.5)
+        self.assertAlmostEqual(ctrl["end"], 7.25)
+        model_cap = self.screen._transcript_captions[1]
+        self.assertAlmostEqual(model_cap.start, 4.5)
+        self.assertAlmostEqual(model_cap.end, 7.25)
+
+
 if __name__ == "__main__":
     unittest.main()

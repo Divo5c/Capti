@@ -991,6 +991,15 @@ class CaptionStyleScreen(Screen):
         cap_start_row = ctk.CTkFrame(card, fg_color="transparent")
         cap_start_row.grid(row=4, column=1, sticky="ew",
                            padx=(0, 24), pady=6)
+        # Exakte Start-Eingabe (Block 52): wie Word-Zeiten, Übernehmen
+        # läuft über den bestehenden Apply-Pfad (atomar, eine History).
+        self._cap_start_entry = ctk.CTkEntry(
+            cap_start_row, width=110, height=32, corner_radius=8,
+            font=self.font("technical", 12),
+            fg_color=self.color("surface_secondary"),
+            border_color=self.color("border"),
+            text_color=self.color("text"))
+        self._cap_start_entry.grid(row=0, column=0, padx=(0, 8))
         self._cap_start_minus_btn = ctk.CTkButton(
             cap_start_row, text=i18n.t("cs.editor_timing_minus"),
             width=51, height=32,
@@ -999,7 +1008,7 @@ class CaptionStyleScreen(Screen):
             border_color=self.color("border"),
             text_color=self.color("text"),
             command=lambda: self._on_caption_nudge("start", -get_nudge_step()))
-        self._cap_start_minus_btn.grid(row=0, column=0, padx=(0, 8))
+        self._cap_start_minus_btn.grid(row=0, column=1, padx=(0, 8))
         self._cap_start_plus_btn = ctk.CTkButton(
             cap_start_row, text=i18n.t("cs.editor_timing_plus"),
             width=51, height=32,
@@ -1008,7 +1017,7 @@ class CaptionStyleScreen(Screen):
             border_color=self.color("border"),
             text_color=self.color("text"),
             command=lambda: self._on_caption_nudge("start", get_nudge_step()))
-        self._cap_start_plus_btn.grid(row=0, column=1)
+        self._cap_start_plus_btn.grid(row=0, column=2)
         ctk.CTkLabel(card, text=i18n.t("cs.caption_nudge_end"),
                      font=self.font("body", 13), anchor="w",
                      text_color=self.color("text")).grid(
@@ -1016,6 +1025,13 @@ class CaptionStyleScreen(Screen):
         cap_end_row = ctk.CTkFrame(card, fg_color="transparent")
         cap_end_row.grid(row=5, column=1, sticky="ew",
                          padx=(0, 24), pady=6)
+        self._cap_end_entry = ctk.CTkEntry(
+            cap_end_row, width=110, height=32, corner_radius=8,
+            font=self.font("technical", 12),
+            fg_color=self.color("surface_secondary"),
+            border_color=self.color("border"),
+            text_color=self.color("text"))
+        self._cap_end_entry.grid(row=0, column=0, padx=(0, 8))
         self._cap_end_minus_btn = ctk.CTkButton(
             cap_end_row, text=i18n.t("cs.editor_timing_minus"),
             width=51, height=32,
@@ -1024,7 +1040,7 @@ class CaptionStyleScreen(Screen):
             border_color=self.color("border"),
             text_color=self.color("text"),
             command=lambda: self._on_caption_nudge("end", -get_nudge_step()))
-        self._cap_end_minus_btn.grid(row=0, column=0, padx=(0, 8))
+        self._cap_end_minus_btn.grid(row=0, column=1, padx=(0, 8))
         self._cap_end_plus_btn = ctk.CTkButton(
             cap_end_row, text=i18n.t("cs.editor_timing_plus"),
             width=51, height=32,
@@ -1033,7 +1049,7 @@ class CaptionStyleScreen(Screen):
             border_color=self.color("border"),
             text_color=self.color("text"),
             command=lambda: self._on_caption_nudge("end", get_nudge_step()))
-        self._cap_end_plus_btn.grid(row=0, column=1)
+        self._cap_end_plus_btn.grid(row=0, column=2)
         # Caption-Keyboard-Hinweis (Block 50): kompakt unter den
         # Caption-Nudge-Buttons, Schrittwert live aus get_nudge_step().
         self._cap_key_hint_label = ctk.CTkLabel(
@@ -1324,6 +1340,10 @@ class CaptionStyleScreen(Screen):
             self._editor_option.set("–")
             self._editor_entry.delete(0, "end")
             self._editor_entry.configure(state="disabled")
+            self._cap_start_entry.delete(0, "end")
+            self._cap_start_entry.configure(state="disabled")
+            self._cap_end_entry.delete(0, "end")
+            self._cap_end_entry.configure(state="disabled")
             self._editor_apply.configure(state="disabled")
             self._editor_time_label.configure(text="")
             self._editor_words_box.configure(state="normal")
@@ -1334,6 +1354,8 @@ class CaptionStyleScreen(Screen):
             self._update_undo_buttons()
             return
         self._editor_entry.configure(state="normal")
+        self._cap_start_entry.configure(state="normal")
+        self._cap_end_entry.configure(state="normal")
         self._editor_apply.configure(state="normal")
         self._editor_words_box.configure(state="normal")
         labels = self._editor_labels()
@@ -1364,6 +1386,10 @@ class CaptionStyleScreen(Screen):
         cap = caps[idx]
         self._editor_entry.delete(0, "end")
         self._editor_entry.insert(0, cap.text)
+        self._cap_start_entry.delete(0, "end")
+        self._cap_start_entry.insert(0, f"{cap.start:.3f}")
+        self._cap_end_entry.delete(0, "end")
+        self._cap_end_entry.insert(0, f"{cap.end:.3f}")
         self._editor_time_label.configure(
             text=f"{i18n.t('cs.editor_start', value=f'{cap.start:.2f}')} · "
                  f"{i18n.t('cs.editor_end', value=f'{cap.end:.2f}')}")
@@ -2068,10 +2094,13 @@ class CaptionStyleScreen(Screen):
             text=i18n.t("cs.editor_applied", index=idx + 1))
 
     def _on_editor_apply(self):
-        """Übernimmt den Edit: Draft -> Segment -> Rebuild -> Preview.
+        """Übernimmt den Edit: Text + exakte Zeiten (Block 52).
 
-        Die geänderte Caption wird sofort angezeigt; Lines/Pop/Layout
-        werden aus dem Render-Modell neu abgeleitet (nicht gespeichert).
+        Leere Zeitfelder -> reiner Text-Edit (bisheriges Verhalten).
+        Ausgefüllte Felder -> atomar Text + Timing, validiert
+        ausschließlich über set_caption_timing() (Wörter unverändert
+        und innerhalb); bei Erfolg genau ein History-Step +
+        Standard-Commit, sonst Ablehnung ohne State-Wechsel.
         """
         caps = list(getattr(self, "_transcript_captions", None) or ())
         idx = self._editor_index
@@ -2079,9 +2108,22 @@ class CaptionStyleScreen(Screen):
                 or not 0 <= idx < len(caps):
             return
         new_text = self._editor_entry.get()
+        raw_start = self._cap_start_entry.get().strip()
+        raw_end = self._cap_end_entry.get().strip()
         draft = _draft_from_caption(caps[idx])
         before = _draft_snapshot(draft)
         _draft_apply_text(draft, new_text)
+        if raw_start or raw_end:
+            new_start = self._parse_time(raw_start) \
+                if raw_start else float(draft.start)
+            new_end = self._parse_time(raw_end) \
+                if raw_end else float(draft.end)
+            if new_start is None or new_end is None:
+                self._reject_word_edit()
+                return
+            if not _draft_set_caption_timing(draft, new_start, new_end):
+                self._reject_word_edit()
+                return
         self._push_history(idx, before, draft)
         self._commit_draft(idx, draft)
         self._editor_hint.configure(
