@@ -1671,6 +1671,85 @@ class TestE2EUI(unittest.TestCase):
             [(w["word"], w["start"], w["end"]) for w in ass_words],
             preview_words)
 
+    def test_e2e_caption_split_chain(self):
+        """Block 55: Split -> Preview -> Save -> Load -> Re-Export.
+
+        Kette: Editor == Controller == RenderModel == ProjectState
+        == Reload == Override == ASS-Input; Whisper wird übersprungen.
+        Split leert bewusst die Undo-History (kein Fake-Undo).
+        """
+        from types import SimpleNamespace
+
+        video = "C:/vids/clip.mp4"
+        segments = [{
+            "start": 5.0, "end": 8.0, "text": "eins zwei",
+            "words": [{"word": "eins", "start": 5.4, "end": 6.0},
+                      {"word": "zwei", "start": 6.5, "end": 7.0}],
+        }]
+        old_env = os.environ.get("CAPTI_CONFIG_FILE")
+        os.environ["CAPTI_CONFIG_FILE"] = str(Path(self.tmp.name)
+                                              / "config.json")
+        try:
+            self.controller.pending_project = {"video_path": video,
+                                               "model": "tiny",
+                                               "language": "de"}
+            self.controller.last_transcript = {
+                "video_path": video, "segments": segments,
+                "model": "tiny", "language": "de"}
+            screen = self.controller.get_screen("caption_style")
+            screen.on_show()
+            labels = list(screen._editor_option.cget("values"))
+            screen._editor_option.set(labels[0])
+            screen._on_editor_select(None)
+            words = list(screen._word_option.cget("values"))
+            screen._word_option.set(words[1])
+            screen._on_word_select(None)
+            screen._cap_split_btn.invoke()
+            editor = screen._transcript_segments
+            self.assertEqual(len(editor), 2)
+            self.assertAlmostEqual(editor[0]["start"], 5.0)
+            self.assertAlmostEqual(editor[0]["end"], 6.0)
+            self.assertEqual(editor[0]["text"], "eins")
+            self.assertAlmostEqual(editor[1]["start"], 6.5)
+            self.assertAlmostEqual(editor[1]["end"], 8.0)
+            self.assertEqual(editor[1]["text"], "zwei")
+            self.assertEqual(dict(screen._undo_histories), {})
+            self.controller.save_project_state(self.proj_path)
+        finally:
+            if old_env is None:
+                os.environ.pop("CAPTI_CONFIG_FILE", None)
+            else:
+                os.environ["CAPTI_CONFIG_FILE"] = old_env
+        self.controller.last_transcript = None
+        self.controller.pending_project = None
+        screen.clear_transcript()
+        loaded = load_project(self.proj_path)
+        self.assertEqual(len(loaded.segments), 2)
+        self.assertEqual(loaded.segments[0]["text"], "eins")
+        self.assertEqual(loaded.segments[1]["text"], "zwei")
+        self.assertAlmostEqual(loaded.segments[1]["start"], 6.5)
+        self.controller.load_project_state(self.proj_path)
+        screen.on_show()
+        preview_words = [(w.word, w.start, w.end)
+                         for cap in screen._transcript_captions
+                         for w in cap.words]
+        self.assertEqual(preview_words,
+                         [(w["word"], w["start"], w["end"])
+                          for seg in loaded.segments
+                          for w in seg["words"]])
+        tmp = _tmpdir(self)
+        captured = {}
+        _pipe, engine, _out, _srt = _run(
+            self, tmp, captured, override=loaded.segments)
+        engine.transcribe.assert_not_called()
+        self.assertEqual(len(captured["ass_segments"]), 2)
+        self.assertAlmostEqual(captured["ass_segments"][0]["end"], 6.0)
+        self.assertAlmostEqual(captured["ass_segments"][1]["start"], 6.5)
+        ass_words = [(w["word"], w["start"], w["end"])
+                     for seg in captured["ass_segments"]
+                     for w in seg["words"]]
+        self.assertEqual(ass_words, preview_words)
+
     def test_e2e_snap_indicator_chain(self):
         """Block 40: Snap-Indikator ist rein temporär (kein Persistenz-
         oder Export-Effekt); Kette Editor == Reload == Override == ASS.

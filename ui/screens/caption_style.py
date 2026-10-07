@@ -8,6 +8,7 @@ Die Caption-Engine/Renderer bleiben unverändert; dieser Screen bereitet
 die Werte vor, die später an den Renderer übergeben werden können.
 """
 
+import copy
 import json
 import math
 import os
@@ -40,6 +41,7 @@ from capti_core.caption_draft import (
     set_word_timing as _draft_set_word_timing,
     split_word_at as _draft_split_word_at,
     snapshot_of_draft as _draft_snapshot,
+    split_segment as _split_segment,
     split_word as _draft_split_word,
     to_segment as _draft_to_segment,
 )
@@ -1245,7 +1247,17 @@ class CaptionStyleScreen(Screen):
             border_color=self.color("border"),
             text_color=self.color("text"),
             command=self._on_word_delete)
-        self._word_delete_btn.grid(row=0, column=2)
+        self._word_delete_btn.grid(row=0, column=2, padx=(0, 8))
+        # Caption-Split (Block 55): teilt die Caption vor dem
+        # ausgewählten Wort (strukturell, kein Undo des Splits).
+        self._cap_split_btn = ctk.CTkButton(
+            split_row, text=i18n.t("cs.caption_split"), width=150, height=32,
+            font=self.font("body", 12), corner_radius=8,
+            fg_color="transparent", border_width=1,
+            border_color=self.color("border"),
+            text_color=self.color("text"),
+            command=self._on_caption_split)
+        self._cap_split_btn.grid(row=0, column=3)
         insert_row = ctk.CTkFrame(card, fg_color="transparent")
         insert_row.grid(row=17, column=1, sticky="ew",
                         padx=(0, 24), pady=(0, 4))
@@ -1988,6 +2000,54 @@ class CaptionStyleScreen(Screen):
         self._commit_draft(idx, draft)
         self._editor_hint.configure(
             text=i18n.t("cs.editor_applied", index=idx + 1))
+
+    def _on_caption_split(self):
+        """Caption vor dem ausgewählten Wort teilen (Block 55).
+
+        Struktureller Commit (kein _commit_draft-Einzelersatz): linke
+        Hälfte bleibt an idx, rechte wird bei idx+1 eingefügt, danach
+        volle Controller-Synchronisation, Histories leeren (alte
+        per-Index-Stände wären nach Index-Verschiebung falsch), rechte
+        Hälfte auswählen, Preview/Editor neu aufbauen. Der Split selbst
+        ist nicht undo-bar (kein Fake-Undo); Buttons spiegeln das wider.
+        """
+        idx, draft = self._current_draft()
+        if draft is None:
+            return
+        widx = self._word_index
+        if widx is None:
+            self._reject_word_edit()
+            return
+        parts = _split_segment(_draft_to_segment(draft), widx)
+        if parts is None:
+            self._reject_word_edit()
+            return
+        left, right = parts
+        segs = self._transcript_segments
+        segs[idx] = left
+        segs.insert(idx + 1, right)
+        last = getattr(self.controller, "last_transcript", None)
+        if isinstance(last, dict):
+            last["segments"] = copy.deepcopy(segs)
+        self._clear_histories()
+        self._editor_index = idx + 1
+        self._rebuild_preview_layout()
+        self._restart_preview_animation()
+        shown = False
+        for cap in self._transcript_captions:
+            if abs(cap.start - right["start"]) < 1e-9:
+                self._display_caption(cap, self._preview_total_ms)
+                shown = True
+                break
+        if not shown and self._transcript_captions:
+            self._display_caption(self._transcript_captions[idx + 1]
+                                  if 0 <= idx + 1
+                                  < len(self._transcript_captions)
+                                  else self._transcript_captions[-1],
+                                  self._preview_total_ms)
+        self._refresh_editor()
+        self._update_undo_buttons()
+        self._editor_hint.configure(text=i18n.t("cs.caption_split_done"))
 
     def _on_word_split(self):
         """Wort splitten (Auto-Split, sonst Ablehnung)."""

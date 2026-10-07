@@ -617,3 +617,53 @@ def to_segment(draft: CaptionDraft) -> dict:
         "words": [{"word": w["word"], "start": w["start"], "end": w["end"]}
                   for w in draft.words],
     }
+
+
+def split_segment(segment: dict, word_index: int):
+    """Teilt ein Segment vor Wort `word_index` in zwei Segmente.
+
+    Linker Teil: Wörter [:word_index], Start = Segment-Start, Ende =
+    Ende des letzten linken Worts. Rechter Teil: Wörter [word_index:],
+    Start = Start des ersten rechten Worts, Ende = Segment-Ende.
+    Texte werden aus den jeweiligen Wörtern zusammengesetzt, Timings
+    aus den tatsächlichen Wort-Timestamps abgeleitet (kein Re-Timing).
+    Beide Hälften werden per set_caption_timing() validiert.
+
+    Gültig nur für 0 < word_index < len(Wörter); sonst None. Das
+    Original wird nicht mutiert. Ungültiges/inkonsistentes Input ->
+    None (keine Exception).
+    """
+    try:
+        words = segment.get("words") if isinstance(segment, dict) else None
+        if not isinstance(words, list) or len(words) < 2:
+            return None
+        if isinstance(word_index, bool) \
+                or not isinstance(word_index, int):
+            return None
+        k = word_index
+        if not 0 < k < len(words):
+            return None
+        left_words = [dict(w) for w in words[:k]]
+        right_words = [dict(w) for w in words[k:]]
+        left_end = float(left_words[-1]["end"])
+        right_start = float(right_words[0]["start"])
+        seg_start = float(segment["start"])
+        seg_end = float(segment["end"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    try:
+        left_text = " ".join(str(w["word"]) for w in left_words)
+        right_text = " ".join(str(w["word"]) for w in right_words)
+    except (KeyError, TypeError):
+        return None
+    left = CaptionDraft(
+        text=left_text,
+        words=left_words, start=seg_start, end=left_end)
+    right = CaptionDraft(
+        text=right_text,
+        words=right_words, start=right_start, end=seg_end)
+    if not set_caption_timing(left, seg_start, left_end):
+        return None
+    if not set_caption_timing(right, right_start, seg_end):
+        return None
+    return to_segment(left), to_segment(right)

@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from capti_core.caption_draft import (
     apply_text,
     draft_from_caption,
+    split_segment,
     to_caption,
     to_segment,
 )
@@ -222,6 +223,89 @@ class TestRebuild(unittest.TestCase):
         (back,) = captions_from_segments([seg], None, None)
         self.assertEqual(back.text, seg["text"])
         self.assertEqual(len(back.words), 3)
+
+
+class TestSplitSegment(unittest.TestCase):
+    """Block 55: Caption-Split (rein, validiert, ohne Mutation)."""
+
+    def _seg(self):
+        return {
+            "start": 5.0, "end": 8.0, "text": "eins zwei drei",
+            "words": [{"word": "eins", "start": 5.4, "end": 6.0},
+                      {"word": "zwei", "start": 6.3, "end": 6.9},
+                      {"word": "drei", "start": 7.2, "end": 7.8}],
+        }
+
+    def test_valid_split(self):
+        left, right = split_segment(self._seg(), 1)
+        self.assertEqual(left["text"], "eins")
+        self.assertEqual(right["text"], "zwei drei")
+        self.assertAlmostEqual(left["start"], 5.0)
+        self.assertAlmostEqual(left["end"], 6.0)
+        self.assertAlmostEqual(right["start"], 6.3)
+        self.assertAlmostEqual(right["end"], 8.0)
+
+    def test_first_possible_word(self):
+        left, right = split_segment(self._seg(), 1)
+        self.assertEqual([w["word"] for w in left["words"]], ["eins"])
+        self.assertEqual([w["word"] for w in right["words"]],
+                         ["zwei", "drei"])
+
+    def test_last_possible_word(self):
+        left, right = split_segment(self._seg(), 2)
+        self.assertEqual([w["word"] for w in left["words"]],
+                         ["eins", "zwei"])
+        self.assertEqual([w["word"] for w in right["words"]], ["drei"])
+        self.assertAlmostEqual(right["start"], 7.2)
+        self.assertAlmostEqual(right["end"], 8.0)
+
+    def test_invalid_split(self):
+        seg = self._seg()
+        self.assertIsNone(split_segment(seg, 0))
+        self.assertIsNone(split_segment(seg, 3))
+        self.assertIsNone(split_segment(seg, -1))
+        self.assertIsNone(split_segment(seg, True))
+        self.assertIsNone(split_segment(seg, "1"))
+
+    def test_word_timestamps_kept(self):
+        left, right = split_segment(self._seg(), 1)
+        self.assertEqual(
+            [(w["word"], w["start"], w["end"]) for w in left["words"]],
+            [("eins", 5.4, 6.0)])
+        self.assertEqual(
+            [(w["word"], w["start"], w["end"]) for w in right["words"]],
+            [("zwei", 6.3, 6.9), ("drei", 7.2, 7.8)])
+
+    def test_timing_derived(self):
+        seg = {"start": 0.0, "end": 10.0, "text": "a b",
+               "words": [{"word": "a", "start": 2.0, "end": 3.0},
+                         {"word": "b", "start": 7.0, "end": 9.0}]}
+        left, right = split_segment(seg, 1)
+        self.assertAlmostEqual(left["start"], 0.0)
+        self.assertAlmostEqual(left["end"], 3.0)
+        self.assertAlmostEqual(right["start"], 7.0)
+        self.assertAlmostEqual(right["end"], 10.0)
+
+    def test_order_kept(self):
+        left, right = split_segment(self._seg(), 2)
+        all_words = [w["word"] for w in left["words"]] + \
+            [w["word"] for w in right["words"]]
+        self.assertEqual(all_words, ["eins", "zwei", "drei"])
+
+    def test_no_mutation(self):
+        seg = self._seg()
+        before = repr(seg)
+        split_segment(seg, 1)
+        self.assertEqual(repr(seg), before)
+
+    def test_garbage_rejected(self):
+        self.assertIsNone(split_segment(None, 1))
+        self.assertIsNone(split_segment({}, 1))
+        self.assertIsNone(split_segment({"words": "xx"}, 1))
+        one = {"start": 0.0, "end": 1.0, "text": "x",
+               "words": [{"word": "x", "start": 0.0, "end": 1.0}]}
+        self.assertIsNone(split_segment(one, 1))
+        self.assertIsNone(split_segment(one, 0))
 
 
 if __name__ == "__main__":
