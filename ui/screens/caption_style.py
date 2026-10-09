@@ -34,6 +34,7 @@ from capti_core.caption_draft import (
     apply_snapshot as _draft_apply_snapshot,
     apply_text as _draft_apply_text,
     draft_from_caption as _draft_from_caption,
+    delete_segment as _delete_segment,
     delete_word as _draft_delete_word,
     insert_word as _draft_insert_word,
     merge_segments as _merge_segments,
@@ -1225,7 +1226,17 @@ class CaptionStyleScreen(Screen):
             border_color=self.color("border"),
             text_color=self.color("text"),
             command=self._on_caption_merge)
-        self._cap_merge_btn.grid(row=0, column=2)
+        self._cap_merge_btn.grid(row=0, column=2, padx=(0, 8))
+        # Caption-Delete (Block 61): entfernt die Caption (strukturell,
+        # kein Undo des Deletes; leeres Transkript möglich).
+        self._cap_delete_btn = ctk.CTkButton(
+            op_row, text=i18n.t("cs.caption_delete"), width=150, height=32,
+            font=self.font("body", 12), corner_radius=8,
+            fg_color="transparent", border_width=1,
+            border_color=self.color("border"),
+            text_color=self.color("text"),
+            command=self._on_caption_delete)
+        self._cap_delete_btn.grid(row=0, column=3)
         self._word_info_label = ctk.CTkLabel(
             card, text="", font=self.font("technical", 12), anchor="w",
             text_color=self.color("text_secondary"))
@@ -2104,6 +2115,45 @@ class CaptionStyleScreen(Screen):
         self._refresh_editor()
         self._update_undo_buttons()
         self._editor_hint.configure(text=i18n.t("cs.caption_merge_done"))
+
+    def _on_caption_delete(self):
+        """Caption entfernen (Block 61).
+
+        Struktureller Commit wie Split/Merge: Element an idx aus der
+        (gleichen) Liste entfernen, volle Controller-Synchronisation,
+        Histories leeren (Index-Verschiebung), Auswahl geclamppt auf
+        den Nachfolger (bzw. None bei leerem Transkript – der
+        inaktive Editor-Zweig stellt das sicher dar), Preview/Editor
+        neu aufbauen. Der Delete selbst ist nicht undo-bar (kein
+        Fake-Undo); Buttons spiegeln das wider.
+        """
+        idx, draft = self._current_draft()
+        if draft is None:
+            return
+        segs = self._transcript_segments
+        rest = _delete_segment(segs, idx)
+        if rest is None:
+            self._reject_word_edit()
+            return
+        segs[:] = rest
+        last = getattr(self.controller, "last_transcript", None)
+        if isinstance(last, dict):
+            last["segments"] = copy.deepcopy(segs)
+        self._clear_histories()
+        self._editor_index = min(idx, len(segs) - 1) if segs else None
+        self._rebuild_preview_layout()
+        self._restart_preview_animation()
+        if self._transcript_captions and segs:
+            sel = self._editor_index
+            self._display_caption(self._transcript_captions[sel]
+                                  if 0 <= sel < len(self._transcript_captions)
+                                  else self._transcript_captions[-1],
+                                  self._preview_total_ms)
+        else:
+            self._display_caption(None, 0)
+        self._refresh_editor()
+        self._update_undo_buttons()
+        self._editor_hint.configure(text=i18n.t("cs.caption_delete_done"))
 
     def _on_word_split(self):
         """Wort splitten (Auto-Split, sonst Ablehnung)."""

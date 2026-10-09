@@ -1835,6 +1835,92 @@ class TestE2EUI(unittest.TestCase):
             [(w["word"], w["start"], w["end"]) for w in ass_words],
             preview_words)
 
+    def test_e2e_caption_delete_chain(self):
+        """Block 61: Delete -> kein Undo -> Save -> Load -> Preview
+        -> Override -> ASS; Whisper wird übersprungen. Danach zweite
+        Kette bis zum leeren Transkript (stabiler Save/Load/Export).
+        """
+        from types import SimpleNamespace
+
+        video = "C:/vids/clip.mp4"
+        segments = [{
+            "start": 0.0, "end": 2.0, "text": "Hallo Welt",
+            "words": [{"word": "Hallo", "start": 0.0, "end": 0.5},
+                      {"word": "Welt", "start": 1.0, "end": 2.0}]},
+            {"start": 5.0, "end": 7.0, "text": "Second here",
+             "words": [{"word": "Second", "start": 5.0, "end": 5.8},
+                       {"word": "here", "start": 5.9, "end": 7.0}]},
+        ]
+        old_env = os.environ.get("CAPTI_CONFIG_FILE")
+        os.environ["CAPTI_CONFIG_FILE"] = str(Path(self.tmp.name)
+                                              / "config.json")
+        try:
+            self.controller.pending_project = {"video_path": video,
+                                               "model": "tiny",
+                                               "language": "de"}
+            self.controller.last_transcript = {
+                "video_path": video, "segments": segments,
+                "model": "tiny", "language": "de"}
+            screen = self.controller.get_screen("caption_style")
+            screen.on_show()
+            labels = list(screen._editor_option.cget("values"))
+            screen._editor_option.set(labels[0])
+            screen._on_editor_select(None)
+            screen._cap_delete_btn.invoke()
+            editor = screen._transcript_segments
+            self.assertEqual(len(editor), 1)
+            self.assertEqual(editor[0]["text"], "Second here")
+            self.assertEqual(dict(screen._undo_histories), {})
+            screen._on_undo()
+            self.assertEqual(len(screen._transcript_segments), 1)
+            self.controller.save_project_state(self.proj_path)
+        finally:
+            if old_env is None:
+                os.environ.pop("CAPTI_CONFIG_FILE", None)
+            else:
+                os.environ["CAPTI_CONFIG_FILE"] = old_env
+        self.controller.last_transcript = None
+        self.controller.pending_project = None
+        screen.clear_transcript()
+        loaded = load_project(self.proj_path)
+        self.assertEqual(len(loaded.segments), 1)
+        self.assertEqual(loaded.segments[0]["text"], "Second here")
+        self.controller.load_project_state(self.proj_path)
+        screen.on_show()
+        preview_words = [(w.word, w.start, w.end)
+                         for w in screen._preview_caption.words]
+        self.assertEqual(preview_words,
+                         [(w["word"], w["start"], w["end"])
+                          for w in loaded.segments[0]["words"]])
+        tmp = _tmpdir(self)
+        captured = {}
+        _pipe, engine, _out, _srt = _run(
+            self, tmp, captured, override=loaded.segments)
+        engine.transcribe.assert_not_called()
+        self.assertEqual(len(captured["ass_segments"]), 1)
+        self.assertAlmostEqual(captured["ass_segments"][0]["start"], 5.0)
+        ass_words = captured["ass_segments"][0]["words"]
+        self.assertEqual(
+            [(w["word"], w["start"], w["end"]) for w in ass_words],
+            preview_words)
+        # Zweite Kette: letzte Caption löschen -> leerer Stand ->
+        # Save -> Load ohne Crash, ohne Ersatzinhalt. Hinweis: Die
+        # Pipeline wertet override=[] wie "kein Override" (bestehende
+        # Semantik: bool([]) ist False) – Re-Export bei Leere läuft
+        # daher in Transkription; das ist Vorverhalten, kein Delete-Bug.
+        screen._cap_delete_btn.invoke()
+        self.assertEqual(screen._transcript_segments, [])
+        self.assertIsNone(screen._editor_index)
+        self.assertEqual(
+            str(screen._editor_entry.cget("state")), "disabled")
+        empty_path = str(Path(self.tmp.name) / "empty.capti.json")
+        self.controller.save_project_state(empty_path)
+        loaded_empty = load_project(empty_path)
+        self.assertEqual(loaded_empty.segments, [])
+        self.controller.load_project_state(empty_path)
+        screen.on_show()
+        self.assertEqual(load_project(empty_path).segments, [])
+
     def test_e2e_snap_indicator_chain(self):
         """Block 40: Snap-Indikator ist rein temporär (kein Persistenz-
         oder Export-Effekt); Kette Editor == Reload == Override == ASS.

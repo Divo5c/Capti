@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from capti_core.caption_draft import (
     apply_text,
+    delete_segment,
     draft_from_caption,
     merge_segments,
     split_segment,
@@ -379,6 +380,73 @@ class TestMergeSegments(unittest.TestCase):
         before = (repr(a), repr(b))
         merge_segments(a, b)
         self.assertEqual((repr(a), repr(b)), before)
+
+
+class TestDeleteSegment(unittest.TestCase):
+    """Block 61: Caption-Delete (rein, ohne Mutation bei Fehlern)."""
+
+    def _segs(self):
+        mk = lambda s, e, t: {
+            "start": s, "end": e, "text": t,
+            "words": [{"word": t, "start": s, "end": e}]}
+        return [mk(0.0, 2.0, "a"), mk(5.0, 7.0, "b"), mk(8.0, 9.0, "c")]
+
+    def test_valid_first(self):
+        rest = delete_segment(self._segs(), 0)
+        self.assertEqual([s["text"] for s in rest], ["b", "c"])
+
+    def test_valid_middle(self):
+        rest = delete_segment(self._segs(), 1)
+        self.assertEqual([s["text"] for s in rest], ["a", "c"])
+        self.assertAlmostEqual(rest[0]["start"], 0.0)
+        self.assertAlmostEqual(rest[1]["start"], 8.0)
+
+    def test_valid_last(self):
+        rest = delete_segment(self._segs(), 2)
+        self.assertEqual([s["text"] for s in rest], ["a", "b"])
+
+    def test_delete_only(self):
+        segs = self._segs()[:1]
+        rest = delete_segment(segs, 0)
+        self.assertEqual(rest, [])
+
+    def test_empty_list(self):
+        self.assertIsNone(delete_segment([], 0))
+
+    def test_bad_index(self):
+        segs = self._segs()
+        self.assertIsNone(delete_segment(segs, 3))
+        self.assertIsNone(delete_segment(segs, -1))
+        self.assertIsNone(delete_segment(segs, True))
+        self.assertIsNone(delete_segment(segs, "0"))
+        self.assertIsNone(delete_segment(segs, 1.0))
+        self.assertIsNone(delete_segment(segs, None))
+
+    def test_bad_input(self):
+        self.assertIsNone(delete_segment(None, 0))
+        self.assertIsNone(delete_segment("xx", 0))
+        self.assertIsNone(delete_segment({}, 0))
+
+    def test_no_mutation(self):
+        segs = self._segs()
+        before = repr(segs)
+        delete_segment(segs, 1)
+        self.assertEqual(repr(segs), before)
+
+    def test_no_mutation_on_error(self):
+        segs = self._segs()
+        before = repr(segs)
+        delete_segment(segs, 9)
+        self.assertEqual(repr(segs), before)
+
+    def test_others_kept_in_order(self):
+        segs = self._segs()
+        rest = delete_segment(segs, 0)
+        self.assertEqual([s["text"] for s in rest], ["b", "c"])
+        self.assertEqual(
+            [(w["word"], w["start"], w["end"])
+             for w in rest[0]["words"]],
+            [("b", 5.0, 7.0)])
 
 
 if __name__ == "__main__":

@@ -706,3 +706,31 @@ def merge_segments(first: dict, second: dict):
     if not set_caption_timing(merged, start, end):
         return None
     return to_segment(merged)
+
+
+def delete_segment(segments: list, index: int):
+    """Entfernt das Segment an `index` (Block 61).
+
+    Gibt eine NEUE Liste ohne das Element zurück; auch das letzte
+    Segment darf entfernt werden (leere Liste als Ergebnis ist
+    gültig). Der Index muss ein echter int sein (kein bool, keine
+    Strings/Floats, keine stillen Konvertierungen).
+
+    Die Original-Liste und ihre Segment-Dicts werden nicht mutiert
+    (flache Kopien der übrigen Dicts). Ungültiger Input -> None
+    (keine Exception).
+    """
+    try:
+        if not isinstance(segments, list):
+            return None
+        if isinstance(index, bool) or not isinstance(index, int):
+            return None
+        if not 0 <= index < len(segments):
+            return None
+        seg = segments[index]
+        if not isinstance(seg, dict):
+            return None
+    except TypeError:
+        return None
+    return [dict(s) if isinstance(s, dict) else s
+            for i, s in enumerate(segments) if i != index]
