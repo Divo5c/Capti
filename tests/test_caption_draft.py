@@ -25,6 +25,7 @@ from capti_core.caption_draft import (
     apply_text,
     delete_segment,
     draft_from_caption,
+    insert_segment,
     merge_segments,
     split_segment,
     to_caption,
@@ -446,6 +447,85 @@ class TestDeleteSegment(unittest.TestCase):
         self.assertEqual(
             [(w["word"], w["start"], w["end"])
              for w in rest[0]["words"]],
+            [("b", 5.0, 7.0)])
+
+
+class TestInsertSegment(unittest.TestCase):
+    """Block 63: Caption-Insert (rein, ohne Mutation bei Fehlern)."""
+
+    def _segs(self):
+        mk = lambda s, e, t: {
+            "start": s, "end": e, "text": t,
+            "words": [{"word": t, "start": s, "end": e}]}
+        return [mk(0.0, 2.0, "a"), mk(5.0, 7.0, "b")]
+
+    def test_insert_middle_uses_gap(self):
+        out = insert_segment(self._segs(), 1)
+        self.assertEqual(len(out), 3)
+        new = out[1]
+        self.assertEqual(new["text"], "")
+        self.assertEqual(new["words"], [])
+        self.assertAlmostEqual(new["start"], 2.0)
+        self.assertAlmostEqual(new["end"], 5.0)
+
+    def test_insert_front(self):
+        out = insert_segment(self._segs(), 0)
+        self.assertEqual(len(out), 3)
+        self.assertAlmostEqual(out[0]["start"], 0.0)
+        self.assertAlmostEqual(out[0]["end"], 1.0)
+        self.assertEqual(out[0]["words"], [])
+
+    def test_insert_end(self):
+        out = insert_segment(self._segs(), 2)
+        self.assertEqual(len(out), 3)
+        self.assertAlmostEqual(out[2]["start"], 7.0)
+        self.assertAlmostEqual(out[2]["end"], 8.0)
+
+    def test_insert_empty_list(self):
+        out = insert_segment([], 0)
+        self.assertEqual(len(out), 1)
+        self.assertAlmostEqual(out[0]["start"], 0.0)
+        self.assertAlmostEqual(out[0]["end"], 1.0)
+        self.assertEqual(out[0]["text"], "")
+        self.assertEqual(out[0]["words"], [])
+
+    def test_touching_fallback(self):
+        mk = lambda s, e, t: {
+            "start": s, "end": e, "text": t,
+            "words": [{"word": t, "start": s, "end": e}]}
+        out = insert_segment([mk(0.0, 1.0, "a"), mk(1.0, 2.0, "b")], 1)
+        self.assertAlmostEqual(out[1]["start"], 1.0)
+        self.assertAlmostEqual(out[1]["end"], 2.0)
+
+    def test_bad_position(self):
+        segs = self._segs()
+        self.assertIsNone(insert_segment(segs, 3))
+        self.assertIsNone(insert_segment(segs, -1))
+        self.assertIsNone(insert_segment(segs, True))
+        self.assertIsNone(insert_segment(segs, "1"))
+        self.assertIsNone(insert_segment(segs, 1.0))
+        self.assertIsNone(insert_segment(segs, None))
+        self.assertIsNone(insert_segment([], 1))
+
+    def test_bad_input(self):
+        self.assertIsNone(insert_segment(None, 0))
+        self.assertIsNone(insert_segment("xx", 0))
+        self.assertIsNone(insert_segment({}, 0))
+
+    def test_no_mutation(self):
+        segs = self._segs()
+        before = repr(segs)
+        insert_segment(segs, 1)
+        self.assertEqual(repr(segs), before)
+
+    def test_order_and_values_kept(self):
+        segs = self._segs()
+        out = insert_segment(segs, 1)
+        self.assertEqual([s["text"] for s in out], ["a", "", "b"])
+        self.assertAlmostEqual(out[0]["end"], 2.0)
+        self.assertAlmostEqual(out[2]["start"], 5.0)
+        self.assertEqual(
+            [(w["word"], w["start"], w["end"]) for w in out[2]["words"]],
             [("b", 5.0, 7.0)])
 
 

@@ -36,6 +36,7 @@ from capti_core.caption_draft import (
     draft_from_caption as _draft_from_caption,
     delete_segment as _delete_segment,
     delete_word as _draft_delete_word,
+    insert_segment as _insert_segment,
     insert_word as _draft_insert_word,
     merge_segments as _merge_segments,
     merge_words as _draft_merge_words,
@@ -1309,6 +1310,20 @@ class CaptionStyleScreen(Screen):
             text_color=self.color("text"),
             command=self._on_word_insert_after)
         self._word_insert_after_btn.grid(row=0, column=2)
+        # Caption-Insert (Block 63): neue leere Caption nach der
+        # Auswahl (strukturell, kein Undo des Inserts).
+        cap_insert_row = ctk.CTkFrame(card, fg_color="transparent")
+        cap_insert_row.grid(row=18, column=1, sticky="ew",
+                            padx=(0, 24), pady=(0, 4))
+        self._cap_insert_btn = ctk.CTkButton(
+            cap_insert_row, text=i18n.t("cs.caption_insert"),
+            width=150, height=32,
+            font=self.font("body", 12), corner_radius=8,
+            fg_color="transparent", border_width=1,
+            border_color=self.color("border"),
+            text_color=self.color("text"),
+            command=self._on_caption_insert)
+        self._cap_insert_btn.grid(row=0, column=0)
         # --- Undo/Redo (Block 27) ---
         self._undo_histories = {}
         self._history_key = None
@@ -2154,6 +2169,54 @@ class CaptionStyleScreen(Screen):
         self._refresh_editor()
         self._update_undo_buttons()
         self._editor_hint.configure(text=i18n.t("cs.caption_delete_done"))
+
+    def _on_caption_insert(self):
+        """Leere Caption nach der Auswahl einfügen (Block 63).
+
+        Struktureller Commit wie Split/Merge/Delete: neue Liste mit
+        Insert an idx+1 (bzw. 0 bei leerem Transkript), Inhalte in
+        place übernehmen, volle Controller-Synchronisation, Histories
+        leeren (Index-Verschiebung), neue Caption auswählen,
+        Preview/Editor neu aufbauen. Der Insert selbst ist nicht
+        undo-bar (kein Fake-Undo); Buttons spiegeln das wider.
+        """
+        idx = self._editor_index
+        segs = self._transcript_segments
+        if segs:
+            if self._preview_mode != "transcript" or idx is None \
+                    or not 0 <= idx < len(segs):
+                self._reject_word_edit()
+                return
+            pos = idx + 1
+        else:
+            pos = 0
+        new_list = _insert_segment(segs, pos)
+        if new_list is None:
+            self._reject_word_edit()
+            return
+        segs[:] = new_list
+        last = getattr(self.controller, "last_transcript", None)
+        if isinstance(last, dict):
+            last["segments"] = copy.deepcopy(segs)
+        self._clear_histories()
+        self._editor_index = pos
+        self._preview_mode = "transcript" if segs else "sample"
+        self._rebuild_preview_layout()
+        self._restart_preview_animation()
+        shown = False
+        for cap in self._transcript_captions:
+            if abs(cap.start - segs[pos]["start"]) < 1e-9:
+                self._display_caption(cap, self._preview_total_ms)
+                shown = True
+                break
+        if not shown and self._transcript_captions:
+            self._display_caption(self._transcript_captions[pos]
+                                  if 0 <= pos < len(self._transcript_captions)
+                                  else self._transcript_captions[-1],
+                                  self._preview_total_ms)
+        self._refresh_editor()
+        self._update_undo_buttons()
+        self._editor_hint.configure(text=i18n.t("cs.caption_insert_done"))
 
     def _on_word_split(self):
         """Wort splitten (Auto-Split, sonst Ablehnung)."""

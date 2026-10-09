@@ -734,3 +734,48 @@ def delete_segment(segments: list, index: int):
         return None
     return [dict(s) if isinstance(s, dict) else s
             for i, s in enumerate(segments) if i != index]
+
+
+def insert_segment(segments: list, position: int):
+    """Fügt eine leere Caption an `position` ein (Block 63).
+
+    Gibt eine NEUE Liste mit dem zusätzlichen Segment zurück. Der
+    Index muss ein echter int im Bereich 0 <= position <= len sein
+    (kein bool, keine Strings/Floats, keine stillen Konvertierungen).
+
+    Neue Caption: Text "", leere Wortliste, Timing aus der Lücke
+    (Start = Ende des Vorgängers bzw. 0.0; Ende = Start des
+    Nachfolgers bei positiver Lücke, sonst Start + 1.0 s). Leere
+    Wortlisten sind per set_caption_timing() gültig; das Ergebnis
+    wird damit validiert. Bestehende Segmente werden weder umgetaktet
+    noch verändert (flache Kopien). Original-Liste unverändert.
+    Ungültiger Input -> None (keine Exception).
+    """
+    try:
+        if not isinstance(segments, list):
+            return None
+        if isinstance(position, bool) or not isinstance(position, int):
+            return None
+        if not 0 <= position <= len(segments):
+            return None
+        start = float(segments[position - 1]["end"]) \
+            if position > 0 else 0.0
+    except (KeyError, TypeError, ValueError):
+        return None
+    end = start + 1.0
+    if position < len(segments):
+        try:
+            nxt = float(segments[position]["start"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        if nxt > start:
+            end = nxt
+    new_seg = {"start": start, "end": end, "text": "", "words": []}
+    probe = CaptionDraft(text="", words=[], start=start, end=end)
+    if not set_caption_timing(probe, start, end):
+        return None
+    return ([dict(s) if isinstance(s, dict) else s
+             for s in segments[:position]]
+            + [new_seg]
+            + [dict(s) if isinstance(s, dict) else s
+               for s in segments[position:]])

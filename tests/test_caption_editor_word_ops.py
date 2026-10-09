@@ -3695,5 +3695,181 @@ class TestCaptionDelete(unittest.TestCase):
         self.assertAlmostEqual(model_caps[0].start, 5.0)
 
 
+class TestCaptionInsert(unittest.TestCase):
+    """Block 63: Caption-Insert (strukturell, History wird geleert)."""
+
+    @classmethod
+    def setUpClass(cls):
+        ctk.set_appearance_mode("dark")
+        cls.root = ctk.CTk()
+        cls.root.withdraw()
+
+    @classmethod
+    def tearDownClass(cls):
+        import contextlib
+        with contextlib.suppress(Exception):
+            cls.root.destroy()
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.config_path = Path(self.tmp.name) / "config.json"
+        self.patcher = patch.object(cs_mod, "_config_file",
+                                    return_value=self.config_path)
+        self.patcher.start()
+        self._prev_lang = i18n.get_language()
+        i18n.set_language("de")
+        self._prev_cfg = os.environ.get("CAPTI_CONFIG_FILE")
+        os.environ["CAPTI_CONFIG_FILE"] = str(self.config_path)
+        self.controller = AppController(self.root)
+        self.screen = self.controller.get_screen("caption_style")
+        self.controller.pending_project = {"video_path": VIDEO_A,
+                                           "model": "tiny", "language": "de"}
+        self.controller.last_transcript = {
+            "video_path": VIDEO_A, "segments": _segments()}
+        self.screen.on_show()
+
+    def tearDown(self):
+        i18n.set_language(self._prev_lang)
+        self.patcher.stop()
+        if self._prev_cfg is None:
+            os.environ.pop("CAPTI_CONFIG_FILE", None)
+        else:
+            os.environ["CAPTI_CONFIG_FILE"] = self._prev_cfg
+        self.tmp.cleanup()
+        import contextlib
+        with contextlib.suppress(Exception):
+            self.screen.destroy()
+
+    # -- Helfer ----------------------------------------------------
+
+    def _select_caption(self, idx):
+        labels = list(self.screen._editor_option.cget("values"))
+        self.screen._editor_option.set(labels[idx])
+        self.screen._on_editor_select(None)
+
+    def _spans(self):
+        return [(s["start"], s["end"], s["text"])
+                for s in self.screen._transcript_segments]
+
+    # -- Tests -----------------------------------------------------
+
+    def test_insert_button_labels_de_en(self):
+        self.assertEqual(self.screen._cap_insert_btn.cget("text"),
+                         "Caption einfügen")
+        i18n.set_language("en")
+        self.assertEqual(i18n.t("cs.caption_insert"), "Insert caption")
+        self.assertEqual(
+            i18n.t("cs.caption_insert_done"),
+            "Caption inserted · history cleared.")
+
+    def test_valid_insert_after(self):
+        self._select_caption(0)
+        self.screen._cap_insert_btn.invoke()
+        spans = self._spans()
+        self.assertEqual(len(spans), 3)
+        self.assertAlmostEqual(spans[1][0], 2.0)
+        self.assertAlmostEqual(spans[1][1], 5.0)
+        self.assertEqual(spans[1][2], "")
+        self.assertEqual(
+            self.screen._transcript_segments[1]["words"], [])
+        self.assertAlmostEqual(spans[0][0], 0.0)
+        self.assertAlmostEqual(spans[2][0], 5.0)
+
+    def test_selection_moves_new(self):
+        self._select_caption(0)
+        self.screen._cap_insert_btn.invoke()
+        self.assertEqual(self.screen._editor_index, 1)
+        self.assertEqual(self.screen._editor_entry.get(), "")
+        self.assertEqual(self.screen._cap_start_entry.get(), "2.000")
+        self.assertEqual(self.screen._cap_end_entry.get(), "5.000")
+        labels = list(self.screen._editor_option.cget("values"))
+        self.assertEqual(len(labels), 3)
+
+    def test_insert_after_last(self):
+        self._select_caption(1)
+        self.screen._cap_insert_btn.invoke()
+        spans = self._spans()
+        self.assertEqual(len(spans), 3)
+        self.assertAlmostEqual(spans[2][0], 7.0)
+        self.assertAlmostEqual(spans[2][1], 8.0)
+        self.assertEqual(self.screen._editor_index, 2)
+
+    def test_insert_into_empty(self):
+        self._select_caption(0)
+        self.screen._cap_delete_btn.invoke()
+        self._select_caption(0)
+        self.screen._cap_delete_btn.invoke()
+        self.assertEqual(self.screen._transcript_segments, [])
+        self.screen._cap_insert_btn.invoke()
+        spans = self._spans()
+        self.assertEqual(len(spans), 1)
+        self.assertAlmostEqual(spans[0][0], 0.0)
+        self.assertAlmostEqual(spans[0][1], 1.0)
+        self.assertEqual(spans[0][2], "")
+        self.assertEqual(self.screen._editor_index, 0)
+
+    def test_no_selection_no_insert(self):
+        before = copy.deepcopy(self.screen._transcript_segments)
+        self.screen._editor_index = None
+        self.screen._cap_insert_btn.invoke()
+        self.assertEqual(self.screen._transcript_segments, before)
+        self.assertTrue(self.screen._editor_hint.cget("text"))
+
+    def test_history_cleared(self):
+        self._select_caption(0)
+        self.screen._cap_start_entry.delete(0, "end")
+        self.screen._cap_end_entry.delete(0, "end")
+        self.screen._editor_entry.delete(0, "end")
+        self.screen._editor_entry.insert(0, "Hallo Welt!")
+        self.screen._on_editor_apply()
+        self.assertEqual(
+            self.screen._undo_histories.get(0).depth, 2)
+        self.screen._cap_insert_btn.invoke()
+        self.assertEqual(dict(self.screen._undo_histories), {})
+        self.assertEqual(
+            str(self.screen._undo_btn.cget("state")), "disabled")
+        self.assertEqual(
+            str(self.screen._redo_btn.cget("state")), "disabled")
+        self.assertIn("Verlauf",
+                      self.screen._editor_hint.cget("text"))
+
+    def test_insert_not_undoable(self):
+        self._select_caption(0)
+        self.screen._cap_insert_btn.invoke()
+        before = copy.deepcopy(self.screen._transcript_segments)
+        self.screen._on_undo()
+        self.screen._on_redo()
+        self.assertEqual(self.screen._transcript_segments, before)
+        self.assertEqual(len(before), 3)
+
+    def test_edit_after_insert_works(self):
+        self._select_caption(0)
+        self.screen._cap_insert_btn.invoke()
+        self.screen._cap_start_entry.delete(0, "end")
+        self.screen._cap_end_entry.delete(0, "end")
+        self.screen._editor_entry.delete(0, "end")
+        self.screen._editor_entry.insert(0, "Neu hier")
+        self.screen._on_editor_apply()
+        hist = self.screen._undo_histories.get(1)
+        self.assertEqual(hist.depth, 2)
+        seg = self.screen._transcript_segments[1]
+        self.assertEqual(seg["text"], "Neu hier")
+        self.screen._on_undo()
+        seg = self.screen._transcript_segments[1]
+        self.assertEqual(seg["text"], "")
+
+    def test_controller_synced(self):
+        self._select_caption(0)
+        self.screen._cap_insert_btn.invoke()
+        ctrl = self.controller.last_transcript["segments"]
+        self.assertEqual(len(ctrl), 3)
+        self.assertEqual(ctrl[1]["text"], "")
+        self.assertEqual(ctrl[1]["words"], [])
+        self.assertAlmostEqual(ctrl[1]["start"], 2.0)
+        model_caps = self.screen._transcript_captions
+        self.assertEqual(len(model_caps), 3)
+        self.assertAlmostEqual(model_caps[1].start, 2.0)
+
+
 if __name__ == "__main__":
     unittest.main()
