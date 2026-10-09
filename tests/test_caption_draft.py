@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from capti_core.caption_draft import (
     apply_text,
     draft_from_caption,
+    merge_segments,
     split_segment,
     to_caption,
     to_segment,
@@ -306,6 +307,78 @@ class TestSplitSegment(unittest.TestCase):
                "words": [{"word": "x", "start": 0.0, "end": 1.0}]}
         self.assertIsNone(split_segment(one, 1))
         self.assertIsNone(split_segment(one, 0))
+
+
+class TestMergeSegments(unittest.TestCase):
+    """Block 59: Caption-Merge (rein, validiert, ohne Mutation)."""
+
+    def _ab(self):
+        a = {"start": 5.0, "end": 6.0, "text": "eins",
+             "words": [{"word": "eins", "start": 5.4, "end": 6.0}]}
+        b = {"start": 6.3, "end": 8.0, "text": "zwei drei",
+             "words": [{"word": "zwei", "start": 6.3, "end": 6.9},
+                       {"word": "drei", "start": 7.2, "end": 7.8}]}
+        return a, b
+
+    def test_valid_merge(self):
+        merged = merge_segments(*self._ab())
+        self.assertAlmostEqual(merged["start"], 5.0)
+        self.assertAlmostEqual(merged["end"], 8.0)
+        self.assertEqual(merged["text"], "eins zwei drei")
+        self.assertEqual([w["word"] for w in merged["words"]],
+                         ["eins", "zwei", "drei"])
+
+    def test_word_order_timing_kept(self):
+        merged = merge_segments(*self._ab())
+        self.assertEqual(
+            [(w["word"], w["start"], w["end"]) for w in merged["words"]],
+            [("eins", 5.4, 6.0), ("zwei", 6.3, 6.9), ("drei", 7.2, 7.8)])
+
+    def test_text_edits_kept(self):
+        a, b = self._ab()
+        a["text"] = "Eins!"
+        b["text"] = "zwei  drei?"
+        merged = merge_segments(a, b)
+        self.assertEqual(merged["text"], "Eins! zwei  drei?")
+
+    def test_single_words(self):
+        a = {"start": 0.0, "end": 1.0, "text": "a",
+             "words": [{"word": "a", "start": 0.0, "end": 1.0}]}
+        b = {"start": 1.0, "end": 2.0, "text": "b",
+             "words": [{"word": "b", "start": 1.0, "end": 2.0}]}
+        merged = merge_segments(a, b)
+        self.assertAlmostEqual(merged["start"], 0.0)
+        self.assertAlmostEqual(merged["end"], 2.0)
+        self.assertEqual(merged["text"], "a b")
+
+    def test_invalid_inputs(self):
+        a, _b = self._ab()
+        self.assertIsNone(merge_segments(None, a))
+        self.assertIsNone(merge_segments(a, None))
+        self.assertIsNone(merge_segments({}, {}))
+        self.assertIsNone(merge_segments("x", "y"))
+        empty = {"start": 0.0, "end": 1.0, "text": "",
+                 "words": []}
+        self.assertIsNone(merge_segments(empty, a))
+        self.assertIsNone(merge_segments(a, empty))
+
+    def test_invalid_result_rejected(self):
+        a = {"start": 5.0, "end": 8.0, "text": "spät",
+             "words": [{"word": "spät", "start": 7.0, "end": 8.0}]}
+        b = {"start": 0.0, "end": 2.0, "text": "früh",
+             "words": [{"word": "früh", "start": 0.0, "end": 2.0}]}
+        self.assertIsNone(merge_segments(a, b))
+        bad = {"start": 0.0, "end": 1.0, "text": "x",
+               "words": [{"word": "x", "start": "inf", "end": 1.0}]}
+        good = {"start": 1.0, "end": 2.0, "text": "y",
+                "words": [{"word": "y", "start": 1.0, "end": 2.0}]}
+        self.assertIsNone(merge_segments(bad, good))
+
+    def test_no_mutation(self):
+        a, b = self._ab()
+        before = (repr(a), repr(b))
+        merge_segments(a, b)
+        self.assertEqual((repr(a), repr(b)), before)
 
 
 if __name__ == "__main__":

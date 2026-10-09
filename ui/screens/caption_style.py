@@ -36,6 +36,7 @@ from capti_core.caption_draft import (
     draft_from_caption as _draft_from_caption,
     delete_word as _draft_delete_word,
     insert_word as _draft_insert_word,
+    merge_segments as _merge_segments,
     merge_words as _draft_merge_words,
     set_caption_timing as _draft_set_caption_timing,
     set_word_timing as _draft_set_word_timing,
@@ -1214,7 +1215,17 @@ class CaptionStyleScreen(Screen):
             border_color=self.color("border"),
             text_color=self.color("text"),
             command=self._on_word_merge)
-        self._word_merge_btn.grid(row=0, column=1)
+        self._word_merge_btn.grid(row=0, column=1, padx=(0, 8))
+        # Caption-Merge (Block 59): vereint die Caption mit ihrem
+        # Nachfolger (strukturell, kein Undo des Merges).
+        self._cap_merge_btn = ctk.CTkButton(
+            op_row, text=i18n.t("cs.caption_merge"), width=150, height=32,
+            font=self.font("body", 12), corner_radius=8,
+            fg_color="transparent", border_width=1,
+            border_color=self.color("border"),
+            text_color=self.color("text"),
+            command=self._on_caption_merge)
+        self._cap_merge_btn.grid(row=0, column=2)
         self._word_info_label = ctk.CTkLabel(
             card, text="", font=self.font("technical", 12), anchor="w",
             text_color=self.color("text_secondary"))
@@ -2048,6 +2059,51 @@ class CaptionStyleScreen(Screen):
         self._refresh_editor()
         self._update_undo_buttons()
         self._editor_hint.configure(text=i18n.t("cs.caption_split_done"))
+
+    def _on_caption_merge(self):
+        """Caption mit ihrem Nachfolger vereinen (Block 59).
+
+        Struktureller Commit wie _on_caption_split (kein
+        _commit_draft-Einzelersatz): Ergebnis an idx, Nachfolger bei
+        idx+1 entfernen, volle Controller-Synchronisation, Histories
+        leeren (Index-Verschiebung), Ergebnis auswählen, Preview/Editor
+        neu aufbauen. Der Merge selbst ist nicht undo-bar (kein
+        Fake-Undo); Buttons spiegeln das wider.
+        """
+        idx, draft = self._current_draft()
+        if draft is None:
+            return
+        segs = self._transcript_segments
+        if not 0 <= idx < len(segs) - 1:
+            self._reject_word_edit()
+            return
+        merged = _merge_segments(segs[idx], segs[idx + 1])
+        if merged is None:
+            self._reject_word_edit()
+            return
+        segs[idx] = merged
+        del segs[idx + 1]
+        last = getattr(self.controller, "last_transcript", None)
+        if isinstance(last, dict):
+            last["segments"] = copy.deepcopy(segs)
+        self._clear_histories()
+        self._editor_index = idx
+        self._rebuild_preview_layout()
+        self._restart_preview_animation()
+        shown = False
+        for cap in self._transcript_captions:
+            if abs(cap.start - merged["start"]) < 1e-9:
+                self._display_caption(cap, self._preview_total_ms)
+                shown = True
+                break
+        if not shown and self._transcript_captions:
+            self._display_caption(self._transcript_captions[idx]
+                                  if 0 <= idx < len(self._transcript_captions)
+                                  else self._transcript_captions[-1],
+                                  self._preview_total_ms)
+        self._refresh_editor()
+        self._update_undo_buttons()
+        self._editor_hint.configure(text=i18n.t("cs.caption_merge_done"))
 
     def _on_word_split(self):
         """Wort splitten (Auto-Split, sonst Ablehnung)."""

@@ -667,3 +667,42 @@ def split_segment(segment: dict, word_index: int):
     if not set_caption_timing(right, right_start, seg_end):
         return None
     return to_segment(left), to_segment(right)
+
+
+def merge_segments(first: dict, second: dict):
+    """Vereint zwei Segmente zu einem (Block 59, Split-Gegenstück).
+
+    Ergebnis: Start = Start des ersten, Ende = Ende des zweiten,
+    Wörter konkateniert (Reihenfolge erhalten), Text aus beiden
+    Texten zusammengesetzt (Ränder gestrippt, je ein Leerzeichen).
+    Wort-Timestamps unverändert (kein Re-Timing). Das Ergebnis wird
+    per set_caption_timing() validiert.
+
+    Beide Inputs müssen Dicts mit Wort-Listen sein; sonst None. Die
+    Originale werden nicht mutiert. Ungültiges Ergebnis -> None
+    (keine Exception).
+    """
+    try:
+        if not isinstance(first, dict) or not isinstance(second, dict):
+            return None
+        words_a = first.get("words")
+        words_b = second.get("words")
+        if not isinstance(words_a, list) or not isinstance(words_b, list):
+            return None
+        if not words_a or not words_b:
+            return None
+        words = [dict(w) for w in words_a] + [dict(w) for w in words_b]
+        text = (str(first.get("text", "")).strip() + " "
+                + str(second.get("text", "")).strip()).strip()
+        start = float(first["start"])
+        end = float(second["end"])
+        for w in words:
+            str(w["word"])
+            float(w["start"])
+            float(w["end"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    merged = CaptionDraft(text=text, words=words, start=start, end=end)
+    if not set_caption_timing(merged, start, end):
+        return None
+    return to_segment(merged)
